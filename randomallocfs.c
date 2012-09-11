@@ -2,10 +2,23 @@
 // Precursor to FUSE-based convenient plausible deniability FS.
 // Vitaly "_Vi" Shukela; License=MIT; 2012.
 
+#define FUSE_USE_VERSION 26
 
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+
+#include <fuse.h>
+#include <ulockmgr.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
+#include <fcntl.h>
+#include <dirent.h>
+#include <errno.h>
+#include <sys/time.h>
+
 
 int block_count;
 int block_size;
@@ -17,28 +30,28 @@ const char* data_name;
 /* 0 - free, 1 - busy */
 unsigned char *busy_map;
 
-struct dirent {
+struct mydirent {
     char* full_path;
     long long int length;
     int* blocks;
     int blocks_array_size;
 };
 
-struct dirent *dirents;
+struct mydirent *dirents;
 int current_dirent_size;
 int dirent_entries_count;
 
 
 
-int is_directory(const struct dirent* i) {
+int is_directory(const struct mydirent* i) {
     return i->full_path[strlen(i->full_path)-1] == '/';
 }
 
-int is_file(const struct dirent* i) {
+int is_file(const struct mydirent* i) {
     return ! is_directory(i);
 }
 
-struct dirent* find_dirent(const char* path) {
+struct mydirent* find_dirent(const char* path) {
     int i;
     int pl = strlen(path);
     if (pl==0) return NULL;
@@ -56,11 +69,11 @@ struct dirent* find_dirent(const char* path) {
     return NULL;
 }
 
-void copy_dirent(struct dirent* dst, struct dirent* src) {
+void copy_dirent(struct mydirent* dst, struct mydirent* src) {
     memcpy(dst, src, sizeof (*src));
 }
 
-void remove_dirent(struct dirent* ent) {
+void remove_dirent(struct mydirent* ent) {
     int index = ent - dirents;
     int i;
     
@@ -70,7 +83,7 @@ void remove_dirent(struct dirent* ent) {
     --dirent_entries_count;
 }
 
-struct dirent* create_dirent() {
+struct mydirent* create_dirent() {
     if (dirent_entries_count < current_dirent_size) {
         return &dirents[dirent_entries_count++];
     } else {
@@ -111,7 +124,7 @@ void mark_used_block(int i) {
     busy_map[i] = 1;
 }
 
-void dealloc_dirent(struct dirent* ent) {
+void dealloc_dirent(struct mydirent* ent) {
     if (ent->length == 0) return;
     int ent_block_count = (ent->length - 1) / block_size + 1;
     if (ent_block_count > ent->blocks_array_size) ent_block_count = ent->blocks_array_size;
@@ -134,7 +147,7 @@ int get_block_count_for_length(int size) {
 }
 
 /* returns 0 on failure, 1 on success */
-int ensure_size(struct dirent* ent, long long int size) {
+int ensure_size(struct mydirent* ent, long long int size) {
     if (size == 0) return 1;
     if (size <= ent->length) return 1;
     int ent_block_count      = get_block_count_for_length(ent->length);
@@ -158,7 +171,7 @@ int ensure_size(struct dirent* ent, long long int size) {
     return 1;    
 }
 
-int d_truncate(struct dirent* ent, long long int size) {
+int d_truncate(struct mydirent* ent, long long int size) {
     if (size >= ent->length) return ensure_size(ent, size);
         
     int ent_block_count      = get_block_count_for_length(ent->length);
@@ -181,7 +194,7 @@ int read_block(unsigned char* buffer, int i) {
     return block_size == fread(buffer, 1, block_size, data);
 }
 
-int get_saved_entry_size(struct dirent* ent) {
+int get_saved_entry_size(struct mydirent* ent) {
     size_t dirent_size = 0;
     dirent_size += 4; /* full_path string length */
     dirent_size += strlen(ent->full_path);
@@ -219,7 +232,7 @@ int save_entries() {
     next_dirent_size = get_saved_entry_size(&dirents[0]);
     
     for (i=0; i<dirent_entries_count; ++i) {
-        struct dirent* ent = &dirents[i];
+        struct mydirent* ent = &dirents[i];
         
         int current_dirent_size = next_dirent_size;
         if (i==dirent_entries_count-1) {
@@ -397,7 +410,7 @@ void traverse_entries_and_debug_print(int starting_block) {
 }
 
 void generate_test_dirents() {
-    struct dirent* ent;
+    struct mydirent* ent;
 
     ent = create_dirent();
     ent->full_path = "/";
@@ -416,7 +429,7 @@ void generate_test_dirents() {
     
     ent = find_dirent("/ololo");
     unsigned char *block = (unsigned char*) malloc(block_size);
-    strcpy(block, "Hello, world\n");
+    strcpy((char*)block, "Hello, world\n");
     write_block(block, ent->blocks[0]);
     
     ent = create_dirent();
@@ -469,6 +482,189 @@ void debug_print_dirents(int starting_block) {
     fprintf(stdout, "usage: %d of %d (%g%%)\n", blocks_used, block_count, 100.0*blocks_used/block_count);
 }
 
+
+static int xmp_getattr(const char *path, struct stat *stbuf)
+{
+    struct mydirent* ent = find_dirent(path);
+    if(!ent) return -ENOENT;
+        
+    
+    memset(stbuf, 0, sizeof(*stbuf));
+    if (is_directory(ent)) {
+        stbuf->st_mode = 0750 | S_IFDIR;
+    } else {
+        stbuf->st_mode = 0750 | S_IFREG;
+        stbuf->st_size = ent->length;
+        stbuf->st_blocks = get_block_count_for_length(ent->length);
+        stbuf->st_blksize = block_size;
+    }
+    stbuf->st_ino = ent - dirents;
+    return 0;
+}
+
+static int xmp_access(const char *path, int mask)
+{
+        return 0;
+}
+
+static int xmp_readlink(const char *path, char *buf, size_t size) { return -ENOSYS; }
+static int xmp_readdir(const char *path, void *buf, fuse_fill_dir_t filler,
+                       off_t offset, struct fuse_file_info *fi)
+{
+    struct stat st;
+    //struct mydirent* ent = find_dirent(path);
+        
+    //if(!ent) return -ENOENT;
+    //if(!is_directory(ent)) return -ENOENT;
+    
+    memset(&st, 0, sizeof(st));
+    st.st_ino = 0;
+    st.st_mode = 0640 | S_IFDIR;
+    filler(buf, ".", &st, 0);
+    filler(buf, "..", &st, 0);
+    
+    int i;
+    int l = strlen(path);
+    if (path[l-1]=='/') --l;
+    
+    // suppose path is "/ololo"
+    for (i=0; i<dirent_entries_count; ++i) {
+        struct mydirent* ent = &dirents[i];
+        if(!strncmp(path, ent->full_path, l)) {
+            // /ololoWHATEVER
+            if (!strcmp(ent->full_path+l, "/")) continue; //  /ololo/ itself
+            if (ent->full_path[l] != '/') continue; // /ololo2
+                
+            char pbuf[256];
+            strncpy(pbuf, ent->full_path+l+1, 256);
+            pbuf[255]=0;
+            
+            if (strchr(ent->full_path+l+1, '/')) {
+                // /ololo/*/*
+                if (strcmp(strchr(ent->full_path+l+1, '/'), "/")) {
+                    // /ololo/something/nested
+                    continue; // in subdirectory
+                } else {
+                    // /ololo/something/
+                    // just directory mydirent
+                }
+            } 
+            
+            if (is_directory(ent)) {                
+                st.st_mode = 0750 | S_IFDIR;
+                pbuf[strlen(pbuf)-1]=0; // strip trailing '/'
+            } else {
+                st.st_mode = 0750 | S_IFREG;
+                st.st_size = ent->length;
+                st.st_blocks = get_block_count_for_length(ent->length);
+                st.st_blksize = block_size;
+            }
+            st.st_ino = i;
+            if (filler(buf, pbuf, &st, 0)) {
+                return 0;
+            }
+        }
+    }
+    
+    return 0;
+}
+static int xmp_mkdir(const char *path, mode_t mode)
+{
+    return -ENOSYS;
+}
+
+static int xmp_unlink(const char *path)
+{
+    return -ENOSYS;
+}
+
+static int xmp_rmdir(const char *path)
+{
+    return -ENOSYS;
+}
+static int xmp_rename(const char *from, const char *to)
+{
+    return -ENOSYS;
+}
+static int xmp_chmod(const char *path, mode_t mode) { return -ENOSYS; }
+static int xmp_chown(const char *path, uid_t uid, gid_t gid) { return -ENOSYS; }
+
+static int xmp_truncate(const char *path, off_t size)
+{
+	return -ENOSYS;
+}
+
+static int xmp_utimens(const char *path, const struct timespec ts[2]) { return -ENOSYS; }
+
+static int xmp_create(const char *path, mode_t mode, struct fuse_file_info *fi)
+{
+	return -ENOENT;
+}
+
+static int xmp_open(const char *path, struct fuse_file_info *fi)
+{
+	return -ENOENT;
+}
+
+static int xmp_read(const char *path, char *buf, size_t size, off_t offset,
+		    struct fuse_file_info *fi)
+{
+	return -ENOENT;
+}
+
+static int xmp_write(const char *path, const char *buf, size_t size,
+		     off_t offset, struct fuse_file_info *fi)
+{
+	return -ENOENT;
+}
+
+static int xmp_statfs(const char *path, struct statvfs *stbuf)
+{
+	return -ENOENT;
+}
+
+static int xmp_flush(const char *path, struct fuse_file_info *fi)
+{
+	return 0;
+}
+
+static int xmp_release(const char *path, struct fuse_file_info *fi)
+{
+	//(void) path;
+	//close(fi->fh);
+	return 0;
+}
+
+static int xmp_fsync(const char *path, int isdatasync,
+		     struct fuse_file_info *fi)
+{
+	return 0;
+}
+
+static struct fuse_operations xmp_oper = {
+	.getattr	= xmp_getattr,
+	.access		= xmp_access,
+	.readlink	= xmp_readlink,
+	.readdir	= xmp_readdir,
+	.mkdir		= xmp_mkdir,
+	.unlink		= xmp_unlink,
+	.rmdir		= xmp_rmdir,
+	.rename		= xmp_rename,
+	.chmod		= xmp_chmod,
+	.chown		= xmp_chown,
+	.truncate	= xmp_truncate,
+	.utimens	= xmp_utimens,
+	.create		= xmp_create,
+	.open		= xmp_open,
+	.read		= xmp_read,
+	.write		= xmp_write,
+	.statfs		= xmp_statfs,
+	.flush		= xmp_flush,
+	.release	= xmp_release,
+	.fsync		= xmp_fsync,
+};
+
+
 int main(int argc, char* argv[]) {
     block_size = 512;
     rnd_name = "/dev/urandom";
@@ -502,15 +698,19 @@ int main(int argc, char* argv[]) {
     memset(busy_map, 0, block_count);
     
     current_dirent_size = 128;
-    dirents = (struct dirent*) malloc(current_dirent_size * sizeof(*dirents));
+    dirents = (struct mydirent*) malloc(current_dirent_size * sizeof(*dirents));
     dirent_entries_count=0;
     
+    int ret;
     
     if (!strcmp(argv[2], "--debug-generate")) {
         generate_test_dirents();
     }
     else if (!strcmp(argv[2], "--debug-print")) {
         debug_print_dirents(atoi(argv[3]));        
+    } else {
+        generate_test_dirents();
+        ret = fuse_main(argc-1, argv+1, &xmp_oper, NULL);
     }
     
     
@@ -518,5 +718,5 @@ int main(int argc, char* argv[]) {
     free(busy_map);
     fclose(data);
     fclose(rnd);
-    return 0;
+    return ret;
 }
