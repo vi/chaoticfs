@@ -27,8 +27,14 @@ FILE* data;
 const char* rnd_name;
 const char* data_name;
 
+int user_first_block;
+
 /* 0 - free, 1 - busy */
 unsigned char *busy_map;
+int busy_blocks_count;
+
+int *saved_directly_blocks;
+int saved_directly_blocks_size;
 
 unsigned char* shred_buffer;
 
@@ -49,7 +55,6 @@ struct myhandle {
 struct mydirent *dirents;
 int current_dirent_size;
 int dirent_entries_count;
-
 
 
 int is_directory(const struct mydirent* i) {
@@ -130,22 +135,51 @@ struct mydirent* create_dirent(const char* path) {
 /*
    returns -1 on failure 
 */
-int allocate_block(int how_hard_to_try) {
+int allocate_block(int privileged_mode) {
     int i;
-    for (i=0; i<how_hard_to_try; ++i) {
+    int index;
+    
+    if (!privileged_mode && busy_blocks_count*105.0/100.0 >= block_count) {
+        return -1;
+    }
+    
+    for (i=0; i<100; ++i) {
         unsigned long long int rrr;
         fread(&rrr, sizeof(rrr), 1, rnd);
-        int index = rrr % block_count;
+        index = rrr % block_count;
         if (busy_map[index]) continue;
         busy_map[index] = 1;
+        ++busy_blocks_count;
         return index;
     }
-    return -1; /* [almost] out of free space */
+    
+    for(i=index+1; i<block_count; ++i) {
+        if (busy_map[index]) continue;
+        return i;
+    }
+    
+    for(i=0; i<index; ++i) {
+        if (busy_map[index]) continue;
+        return i;        
+    }
+    
+    /* No more free blocks at all */
+    
+    if (privileged_mode) {
+        /* Emergency measures: expand the storage file to save directory in it */
+        fprintf(stderr, "Expanding the data file to store the directory\n");
+        ++block_count;
+        return block_count-1;
+    }
+    
+    return -1; /* out of free space */
 }
 
 void mark_unused_block(int i) {
     if (!busy_map[i]) {
-        fprintf(stderr, "Freeing not occupied block\n");
+        fprintf(stderr, "Freeing not occupied block %d\n", i);
+    } else {
+        --busy_blocks_count;
     }
     busy_map[i] = 0;
 }
@@ -157,7 +191,9 @@ void shred_block(int i) {
 
 void mark_used_block(int i) {
     if (busy_map[i]) {
-        fprintf(stderr, "Marking the block twice\n");
+        fprintf(stderr, "Marking the block %d twice\n", i);
+    } else {
+        ++busy_blocks_count;
     }
     busy_map[i] = 1;
 }
@@ -192,7 +228,7 @@ int ensure_size(struct mydirent* ent, long long int size) {
     
     int i;
     for(i=ent_block_count; i<required_block_count; ++i) {
-        ent->blocks[i] = allocate_block(100);
+        ent->blocks[i] = allocate_block(0);
         if ((ent->blocks[i]) == -1) {
             free(zeroes);
             return 0;
@@ -230,13 +266,18 @@ int read_block(unsigned char* buffer, int i) {
     return block_size == fread(buffer, 1, block_size, data);
 }
 
-int get_saved_entry_size(struct mydirent* ent) {
+
+int get_saved_entry_minimal_size(struct mydirent* ent) {
     size_t dirent_size = 0;
     dirent_size += 4; /* full_path string length */
     dirent_size += strlen(ent->full_path);
     dirent_size += 8; /* file length */
-    int bc = get_block_count_for_length(ent->length);
-    dirent_size += 4*bc; /* block list */
+    //int bc = get_block_count_for_length(ent->length);
+    //dirent_size += 4*bc; /* block list */
+    dirent_size += 4; /* number of blocks in this extent */
+    // If we can't save all block numbers in this block, we save further block numbers in next blocks
+    
+    dirent_size+=16; /* there should be room for at least 4 blocks or this is not serious */
     dirent_size += 4; /* next dirent's block number */
     dirent_size += 4; /* next dirent's offset in block */ 
     dirent_size += 8; /* padding for possible extensions */
@@ -244,14 +285,14 @@ int get_saved_entry_size(struct mydirent* ent) {
 }
 
 /* Returns first entry's block. -1 on failure */
-int save_entries() {
+int save_entries(int starting_block) {
     int i, j;
     
     int allocated_blocks_journal_size=32;
     int *allocated_blocks_journal = (int*) malloc(allocated_blocks_journal_size*sizeof(int));
     int number_of_allocated_blocks=0;
     
-    int first_block = allocate_block(100);
+    int first_block = starting_block;
     if(!first_block==-1) {
         free(allocated_blocks_journal);
         return -1;
@@ -260,33 +301,50 @@ int save_entries() {
     
     int current_block = first_block;
     
-    unsigned char* block = (unsigned char*) malloc(block_size);
+    /* First block is saved last to prevent entirely corrupting the filesystem in case of sudden shutdown */
+    unsigned char* first_block_buffer = (unsigned char*) malloc(block_size);
+    unsigned char* block_buffer = (unsigned char*) malloc(block_size);
+    unsigned char* block = first_block_buffer;
     fread(block, 1, 8, rnd);
     int offset = 8; 
     
     int next_dirent_size = 0;
-    next_dirent_size = get_saved_entry_size(&dirents[0]);
+    next_dirent_size = get_saved_entry_minimal_size(&dirents[0]);
+    
+    int position_in_block_list = 0;
+    int dirent_fully_saved = 0;
     
     for (i=0; i<dirent_entries_count; ++i) {
         struct mydirent* ent = &dirents[i];
         
         int current_dirent_size = next_dirent_size;
+        int number_of_blocks_we_will_save = (block_size - offset - current_dirent_size) / sizeof(int);
         if (i==dirent_entries_count-1) {
             next_dirent_size = 0;
         } else {
-            next_dirent_size = get_saved_entry_size(&dirents[i+1]);
+            next_dirent_size = get_saved_entry_minimal_size(&dirents[i+1]);
         }
         
         int path_string_length = strlen(ent->full_path);
         long long int file_lenght = ent->length;
         int bc = get_block_count_for_length(ent->length);
         
+        if (bc <= position_in_block_list + number_of_blocks_we_will_save) {
+            number_of_blocks_we_will_save = bc - position_in_block_list;
+            dirent_fully_saved = 1;
+        } else {
+            dirent_fully_saved = 0;
+            next_dirent_size = current_dirent_size;
+        }
+        
         *(long int*)(block+offset) = htobe32(path_string_length); offset+=4;
         memcpy(block+offset, ent->full_path, path_string_length); offset+=path_string_length;
         *(long long int*)(block+offset) = htobe64(file_lenght); offset+=8;
-        for (j=0; j<bc; ++j) {
+        *(long int*)(block+offset) = htobe32(number_of_blocks_we_will_save); offset+=4;
+        for (j=position_in_block_list; j<position_in_block_list + number_of_blocks_we_will_save; ++j) {
             *(long int*)(block+offset) = htobe32(ent->blocks[j]); offset+=4;
         }
+        position_in_block_list += number_of_blocks_we_will_save;
         
         if (next_dirent_size == 0) {
             *(long int*)(block+offset) = htobe32(0); offset+=4;
@@ -297,12 +355,15 @@ int save_entries() {
             *(long int*)(block+offset) = htobe32(offset+12); offset+=4;
             memset(block+offset, 0, 8); offset+=8;            
         } else {
-            int new_block = allocate_block(1000);
-            if(new_block==-1) {
-                free(block);
+            int new_block = allocate_block(1);
+            if(new_block==-1) {                
+                free(first_block_buffer);
+                free(block_buffer);
                 /* rolling back block allocations... */
                 for (j=0; j<number_of_allocated_blocks; ++j) {
-                    mark_unused_block(allocated_blocks_journal[i]);
+                    if (allocated_blocks_journal[i]!=starting_block) {
+                        mark_unused_block(allocated_blocks_journal[i]);
+                    }
                 }
                 free(allocated_blocks_journal);
                 return -1;
@@ -318,25 +379,50 @@ int save_entries() {
             *(long int*)(block+offset) = htobe32(8); offset+=4;
             memset(block+offset, 0, 8); offset+=8;            
             
-            write_block(block, current_block);
+            if (block == first_block_buffer) {
+                block = block_buffer;
+            } else {
+                write_block(block, current_block);
+            }
             
             current_block = new_block;
             fread(block, 1, 8, rnd);
             offset = 8; 
         }
+        if (dirent_fully_saved) {
+            position_in_block_list = 0;
+        } else {
+            --i;
+        }
         next_dirent_size = current_dirent_size;
     }
     
     write_block(block, current_block);
+    write_block(first_block_buffer, starting_block);
+    fflush(data);
+    fsync(fileno(data));
     
-    free(block);
+    for (i=0; i<saved_directly_blocks_size; ++i) {
+        if (saved_directly_blocks[i]!=starting_block) {
+            mark_unused_block(saved_directly_blocks[i]);
+        }
+    }
+    saved_directly_blocks_size = allocated_blocks_journal_size;
+    free(saved_directly_blocks);
+    saved_directly_blocks = (int*)malloc(saved_directly_blocks_size*sizeof(int*));
+    memcpy(saved_directly_blocks, allocated_blocks_journal, sizeof(int*)*allocated_blocks_journal_size);
+    
+    free(first_block_buffer);
+    free(block_buffer);
     free(allocated_blocks_journal);
     return first_block;
 }
 
-/* return 1 on success, 0 on failure */
-int traverse_entries_and_mark_used_blocks(int starting_block) {
-    mark_used_block(starting_block);
+/* return number of loaded entries on success, 0 on failure */
+int load_entries(int starting_block, int only_mark_blocks) {
+    if (!busy_map[starting_block]) {
+        mark_used_block(starting_block);
+    }
     int current_block = starting_block;
     
     unsigned char* block = (unsigned char*) malloc(block_size);
@@ -345,22 +431,56 @@ int traverse_entries_and_mark_used_blocks(int starting_block) {
     int offset=8;
     
     int j;
+    int counter;
     
-    for(;;) {
+    char* previous_entry_name = strdup("///"); /* non-existing name */
+    int block_position_in_previous_ent;
+    
+    struct mydirent *ent = NULL;
+            
+    for(;;) {            
         int pathlen = be32toh(*(long int*)(block+offset)); offset+=4;
         if(pathlen < 0 || pathlen >= block_size-32) { free(block); return 0; }
+        if (!only_mark_blocks) {
+            char* path = strndup((char*)(block+offset), pathlen);
+            if (!strcmp(previous_entry_name, path)) {
+                /* continued blocks for old entry, not a new one */
+            } else {
+                free(previous_entry_name);
+                previous_entry_name = path;
+                ent = create_dirent(path);
+                block_position_in_previous_ent = 0;
+            }
+        }
         offset+=pathlen;
         long long int filelen = be64toh(*(long long int*)(block+offset)); offset+=8;
+        if (ent) {
+            ent->length = filelen;
+        }
+        
         int bc = get_block_count_for_length(filelen);
-        for (j=0; j<bc; ++j) {
+        int blocks_here = be32toh(*(long int*)(block+offset)); offset+=4;
+        if (ent && !block_position_in_previous_ent) {
+            ent->blocks_array_size = nearest_power_of_two(bc);
+            ent->blocks = (int*)malloc(ent->blocks_array_size * sizeof(int));
+            memset(ent->blocks, 0, ent->blocks_array_size);
+        }
+        for (j=0; j<blocks_here; ++j) {
             int idx = be32toh(*(long int*)(block+offset)); offset+=4;
             if(idx>=0 && idx<block_count) {
                 mark_used_block(idx);
+                if (ent) {
+                    ent->blocks[j+block_position_in_previous_ent] = idx;
+                }
             } else {
                 free(block);
                 return 0;
             }
         }
+        block_position_in_previous_ent += blocks_here;
+        
+        ++counter;
+        
         int next_block = be32toh(*(long int*)(block+offset)); offset+=4;
         int next_offset = be32toh(*(long int*)(block+offset)); offset+=4;
         
@@ -379,7 +499,8 @@ int traverse_entries_and_mark_used_blocks(int starting_block) {
     }
     
     free(block);
-    return 1;
+    free(previous_entry_name);
+    return counter;
 }
 
 /* return 1 on success, 0 on failure */
@@ -409,10 +530,12 @@ void traverse_entries_and_debug_print(int starting_block) {
         }
         offset+=pathlen;
         long long int filelen = be64toh(*(long long int*)(block+offset)); offset+=8;
-        fprintf(stdout, "  size %lld\n", filelen); fflush(stdout);
+        fprintf(stdout, "  size %lld (", filelen); fflush(stdout);
         int bc = get_block_count_for_length(filelen);
-        fprintf(stdout, "  block count %d\n", bc); fflush(stdout);
-        for (j=0; j<bc; ++j) {
+        fprintf(stdout, "block_count %d)\n", bc); fflush(stdout);
+        int blocks_here = be32toh(*(long int*)(block+offset)); offset+=4;
+        fprintf(stdout, "  block here %d\n", blocks_here); fflush(stdout);
+        for (j=0; j<blocks_here; ++j) {
             int idx = be32toh(*(long int*)(block+offset)); offset+=4;
             fprintf(stdout, "  block %d\n", idx); fflush(stdout);
             if(idx>=0 && idx<block_count) {
@@ -475,25 +598,23 @@ void generate_test_dirents() {
     free(block);
     
     
-    int s = save_entries();
+    int s = save_entries(user_first_block);
     
     fprintf(stderr, "%d\n", s);
 }
 
 void debug_print_dirents(int starting_block) {
     traverse_entries_and_debug_print(starting_block);
-    traverse_entries_and_mark_used_blocks(starting_block);
+    load_entries(starting_block, 1);
     int i;
     fprintf(stdout, "busy blocks: ");
-    int blocks_used=0;
     for(i=0; i<block_count; ++i) {
         if (busy_map[i]) {
-            ++blocks_used;
             fprintf(stdout, "%d ", i);
         }
     }
     fprintf(stdout, "\n"); fflush(stdout);
-    fprintf(stdout, "usage: %d of %d (%g%%)\n", blocks_used, block_count, 100.0*blocks_used/block_count);
+    fprintf(stdout, "usage: %d of %d (%g%%)\n", busy_blocks_count, block_count, 100.0*busy_blocks_count/block_count);
 }
 
 
@@ -852,7 +973,7 @@ static struct fuse_operations xmp_oper = {
 
 
 int main(int argc, char* argv[]) {
-    block_size = 512;
+    block_size = 4096;
     rnd_name = "/dev/urandom";
     
     if (getenv("BLOCK_SIZE"))  block_size = atoi(getenv("BLOCK_SIZE"));
@@ -864,6 +985,7 @@ int main(int argc, char* argv[]) {
     }
     
     data_name = argv[1];
+    user_first_block = 2;
     
     rnd= fopen(rnd_name, "rb");
     if(!rnd) { perror("fopen random"); return 2; }
@@ -882,7 +1004,12 @@ int main(int argc, char* argv[]) {
     
     shred_buffer = (unsigned char*) malloc(block_size);
     busy_map = (unsigned char*) malloc(block_count);
+    busy_blocks_count = 0;
     memset(busy_map, 0, block_count);
+    saved_directly_blocks_size = 0;
+    saved_directly_blocks = NULL;
+    
+    mark_used_block(user_first_block);
     
     current_dirent_size = 128;
     dirents = (struct mydirent*) malloc(current_dirent_size * sizeof(*dirents));
@@ -896,7 +1023,12 @@ int main(int argc, char* argv[]) {
     else if (!strcmp(argv[2], "--debug-print")) {
         debug_print_dirents(atoi(argv[3]));        
     } else {
-        generate_test_dirents();
+        int r = load_entries(user_first_block, 0);
+        
+        if (!r) {
+            fprintf(stderr, "No entries loaded, creating default entry\n");
+            create_dirent("/");
+        }
         
         #define MY 2
         char** new_argv = (char**)malloc( (argc-1+MY+1) * sizeof(char*));
@@ -911,6 +1043,8 @@ int main(int argc, char* argv[]) {
         new_argv[i-1+MY]=NULL;
         ret = fuse_main(i-1+MY, new_argv, &xmp_oper, NULL);
         free(new_argv);
+        
+        save_entries(user_first_block);
     }
     
     
