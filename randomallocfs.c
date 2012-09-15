@@ -20,6 +20,9 @@
 #include <sys/time.h>
 
 
+#define SIGNATURE "RndAllV0"
+#define BLOCK_HEADER_SIZE 16
+
 int block_count;
 int block_size;
 FILE* rnd;
@@ -274,7 +277,9 @@ int get_saved_entry_minimal_size(struct mydirent* ent) {
     dirent_size += 8; /* file length */
     //int bc = get_block_count_for_length(ent->length);
     //dirent_size += 4*bc; /* block list */
+    
     dirent_size += 4; /* number of blocks in this extent */
+    dirent_size += 4; /* starting block in this extend */
     // If we can't save all block numbers in this block, we save further block numbers in next blocks
     
     dirent_size+=16; /* there should be room for at least 4 blocks or this is not serious */
@@ -306,7 +311,8 @@ int save_entries(int starting_block) {
     unsigned char* block_buffer = (unsigned char*) malloc(block_size);
     unsigned char* block = first_block_buffer;
     fread(block, 1, 8, rnd);
-    int offset = 8; 
+    memcpy(block+8, SIGNATURE, 8);
+    int offset = BLOCK_HEADER_SIZE; 
     
     int next_dirent_size = 0;
     next_dirent_size = get_saved_entry_minimal_size(&dirents[0]);
@@ -341,6 +347,7 @@ int save_entries(int starting_block) {
         memcpy(block+offset, ent->full_path, path_string_length); offset+=path_string_length;
         *(long long int*)(block+offset) = htobe64(file_lenght); offset+=8;
         *(long int*)(block+offset) = htobe32(number_of_blocks_we_will_save); offset+=4;
+        *(long int*)(block+offset) = htobe32(position_in_block_list); offset+=4;
         for (j=position_in_block_list; j<position_in_block_list + number_of_blocks_we_will_save; ++j) {
             *(long int*)(block+offset) = htobe32(ent->blocks[j]); offset+=4;
         }
@@ -376,7 +383,7 @@ int save_entries(int starting_block) {
                 allocated_blocks_journal[number_of_allocated_blocks++] = new_block;
             }
             *(long int*)(block+offset) = htobe32(new_block); offset+=4;
-            *(long int*)(block+offset) = htobe32(8); offset+=4;
+            *(long int*)(block+offset) = htobe32(BLOCK_HEADER_SIZE); offset+=4;
             memset(block+offset, 0, 8); offset+=8;            
             
             if (block == first_block_buffer) {
@@ -387,7 +394,8 @@ int save_entries(int starting_block) {
             
             current_block = new_block;
             fread(block, 1, 8, rnd);
-            offset = 8; 
+            memcpy(block+8, SIGNATURE, 8);
+            offset = BLOCK_HEADER_SIZE; 
         }
         if (dirent_fully_saved) {
             position_in_block_list = 0;
@@ -428,13 +436,16 @@ int load_entries(int starting_block, int only_mark_blocks) {
     unsigned char* block = (unsigned char*) malloc(block_size);
     
     read_block(block, starting_block);
-    int offset=8;
+    int offset;
+    if (memcmp(block+8, SIGNATURE, 8)) {
+        return 0;
+    }
+    offset=BLOCK_HEADER_SIZE;
     
     int j;
     int counter;
     
     char* previous_entry_name = strdup("///"); /* non-existing name */
-    int block_position_in_previous_ent;
     
     struct mydirent *ent = NULL;
             
@@ -449,7 +460,6 @@ int load_entries(int starting_block, int only_mark_blocks) {
                 free(previous_entry_name);
                 previous_entry_name = path;
                 ent = create_dirent(path);
-                block_position_in_previous_ent = 0;
             }
         }
         offset+=pathlen;
@@ -460,7 +470,8 @@ int load_entries(int starting_block, int only_mark_blocks) {
         
         int bc = get_block_count_for_length(filelen);
         int blocks_here = be32toh(*(long int*)(block+offset)); offset+=4;
-        if (ent && !block_position_in_previous_ent) {
+        int position_in_block_list = be32toh(*(long int*)(block+offset)); offset+=4;
+        if (ent && !ent->blocks && bc) {
             ent->blocks_array_size = nearest_power_of_two(bc);
             ent->blocks = (int*)malloc(ent->blocks_array_size * sizeof(int));
             memset(ent->blocks, 0, ent->blocks_array_size);
@@ -470,14 +481,13 @@ int load_entries(int starting_block, int only_mark_blocks) {
             if(idx>=0 && idx<block_count) {
                 mark_used_block(idx);
                 if (ent) {
-                    ent->blocks[j+block_position_in_previous_ent] = idx;
+                    ent->blocks[j+position_in_block_list] = idx;
                 }
             } else {
                 free(block);
                 return 0;
             }
         }
-        block_position_in_previous_ent += blocks_here;
         
         ++counter;
         
@@ -487,11 +497,15 @@ int load_entries(int starting_block, int only_mark_blocks) {
         if (next_block == 0 && next_offset == 0) break;
         
         if (next_block < 0 || next_block >= block_count) { free(block); return 0; }
-        if (next_offset < 8  || next_offset >= block_size-32) { free(block); return 0; }
+        if (next_offset < BLOCK_HEADER_SIZE || next_offset >= block_size-32) { free(block); return 0; }
             
         if (next_block != current_block) {
             current_block = next_block;
             read_block(block, current_block);
+            if (memcmp(block+8, SIGNATURE, 8)) {
+                fprintf(stderr, "Signature failed in loading block\n");
+                return counter;
+            }
             mark_used_block(current_block);
         }        
         
@@ -511,7 +525,15 @@ void traverse_entries_and_debug_print(int starting_block) {
     unsigned char* block2 = (unsigned char*) malloc(block_size);
     
     read_block(block, starting_block);
-    int offset=8;
+    int offset;
+    {
+        if (memcmp(block+8, SIGNATURE, 8)) {
+            char buf[10];
+            snprintf(buf, 9, "%s", block+8);
+            printf("Block signature is %s instead of %s\n", buf, SIGNATURE);
+        }
+    }
+    offset=BLOCK_HEADER_SIZE;
     
     int j;
     
@@ -535,6 +557,8 @@ void traverse_entries_and_debug_print(int starting_block) {
         fprintf(stdout, "block_count %d)\n", bc); fflush(stdout);
         int blocks_here = be32toh(*(long int*)(block+offset)); offset+=4;
         fprintf(stdout, "  block here %d\n", blocks_here); fflush(stdout);
+        int blocks_offset = be32toh(*(long int*)(block+offset)); offset+=4;
+        fprintf(stdout, "  blocks offset %d\n", blocks_offset); fflush(stdout);
         for (j=0; j<blocks_here; ++j) {
             int idx = be32toh(*(long int*)(block+offset)); offset+=4;
             fprintf(stdout, "  block %d\n", idx); fflush(stdout);
@@ -558,6 +582,11 @@ void traverse_entries_and_debug_print(int starting_block) {
         if (next_block != current_block) {
             current_block = next_block;
             read_block(block, current_block);
+            if (memcmp(block+8, SIGNATURE, 8)) {
+                char buf[10];
+                snprintf(buf, 9, "%s", block+8);
+                printf("Block signature is %s instead of %s\n", buf, SIGNATURE);
+            }
         }        
         
         offset = next_offset;
