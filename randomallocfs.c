@@ -93,6 +93,7 @@ void copy_dirent(struct mydirent* dst, struct mydirent* src) {
 int get_block_count_for_length(long long int size);
 void mark_unused_block(int i);
 int write_block(const unsigned char* buffer, int i);
+int nearest_power_of_two(int s);
 
 void remove_dirent(struct mydirent* ent) {
     int index = ent - dirents;
@@ -140,21 +141,27 @@ struct mydirent* create_dirent(const char* path) {
 */
 int allocate_block(int privileged_mode) {
     int i;
-    int index;
+    int index=0;
     
     if (!privileged_mode && busy_blocks_count*105.0/100.0 >= block_count) {
-        return -1;
+        return -1; /* out of free space */
     }
     
-    for (i=0; i<100; ++i) {
-        unsigned long long int rrr;
-        fread(&rrr, sizeof(rrr), 1, rnd);
-        index = rrr % block_count;
-        if (busy_map[index]) continue;
-        busy_map[index] = 1;
-        ++busy_blocks_count;
-        return index;
-    }
+    if (busy_blocks_count < block_count - 5) {
+        for (i=0; i<100; ++i) {
+            unsigned long long int rrr;
+            fread(&rrr, sizeof(rrr), 1, rnd);
+            index = rrr % block_count;
+            if (busy_map[index]) continue;
+            if (index == user_first_block) {
+                fprintf(stderr, "Starting block is not used?\n");
+                continue;
+            }
+            busy_map[index] = 1;
+            ++busy_blocks_count;
+            return index;
+        }
+    } 
     
     for(i=index+1; i<block_count; ++i) {
         if (busy_map[index]) continue;
@@ -172,6 +179,10 @@ int allocate_block(int privileged_mode) {
         /* Emergency measures: expand the storage file to save directory in it */
         fprintf(stderr, "Expanding the data file to store the directory\n");
         ++block_count;
+        ++busy_blocks_count;
+        int po2 = nearest_power_of_two(block_count);
+        busy_map = realloc(busy_map, po2);
+        busy_map[block_count-1]=1;
         return block_count-1;
     }
     
@@ -977,6 +988,13 @@ static int xmp_fsync(const char *path, int isdatasync,
 	return 0;
 }
 
+
+static void xmp_destroy(void* unused)
+{
+    save_entries(user_first_block);
+}
+
+
 static struct fuse_operations xmp_oper = {
 	.getattr	= xmp_getattr,
 	.access		= xmp_access,
@@ -998,6 +1016,7 @@ static struct fuse_operations xmp_oper = {
 	.flush		= xmp_flush,
 	.release	= xmp_release,
 	.fsync		= xmp_fsync,
+    .destroy    = xmp_destroy,
 };
 
 
@@ -1072,8 +1091,6 @@ int main(int argc, char* argv[]) {
         new_argv[i-1+MY]=NULL;
         ret = fuse_main(i-1+MY, new_argv, &xmp_oper, NULL);
         free(new_argv);
-        
-        save_entries(user_first_block);
     }
     
     
