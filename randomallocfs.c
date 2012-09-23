@@ -101,6 +101,7 @@ int get_block_count_for_length(long long int size);
 void mark_unused_block(int i);
 int write_block(const unsigned char* buffer, int i);
 int nearest_power_of_two(int s);
+void shred_block(int i);
 
 void remove_dirent(struct mydirent* ent) {
     int index = ent - dirents;
@@ -114,7 +115,7 @@ void remove_dirent(struct mydirent* ent) {
     if (ent->blocks) {
         int bc = get_block_count_for_length(ent->length);
         for (i=0; i<bc; ++i) {
-            write_block(zeroes, ent->blocks[i]);
+            shred_block(ent->blocks[i]);
             mark_unused_block(ent->blocks[i]);
         }
     }
