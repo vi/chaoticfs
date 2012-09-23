@@ -18,6 +18,7 @@
 #include <dirent.h>
 #include <errno.h>
 #include <sys/time.h>
+#include <signal.h>
 
 
 #define SIGNATURE "RndAllV0"
@@ -715,7 +716,7 @@ void generate_test_dirents() {
 }
 
 void raise_alarm() {
-    
+    alarm(5);
 }
 
 void debug_print_dirents(int starting_block) {
@@ -1113,6 +1114,9 @@ static struct fuse_operations xmp_oper = {
     .destroy    = xmp_destroy,
 };
 
+void sigalm() {
+    save_entries(user_first_block);
+}
 
 int main(int argc, char* argv[]) {
     block_size = 4096;
@@ -1159,6 +1163,11 @@ int main(int argc, char* argv[]) {
     
     readonly_flag = 0;
     dirty_status = 0;
+    
+    {
+        struct sigaction sa = {{&sigalm}};
+        sigaction(SIGALRM, &sa, NULL);
+    }
     
     int ret;
     
