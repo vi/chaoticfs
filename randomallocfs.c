@@ -1118,6 +1118,8 @@ void sigalm() {
     save_entries(user_first_block);
 }
 
+char passwords_area[65536];
+
 int main(int argc, char* argv[]) {
     block_size = 4096;
     rnd_name = "/dev/urandom";
@@ -1155,6 +1157,35 @@ int main(int argc, char* argv[]) {
     saved_directory_blocks_size = 0;
     saved_directory_blocks = NULL;
     
+    {
+        printf("Enter the comma-separated blockpasswords list (example: \"2sK1m49se,5sldmIqaa,853svmqpsd\")\n");
+        fgets(passwords_area, sizeof(passwords_area), stdin);
+        passwords_area[sizeof(passwords_area)-1]=0;
+        if (passwords_area[strlen(passwords_area)-1] == '\n') passwords_area[strlen(passwords_area)-1]=0;
+        char* s = strtok(passwords_area, ",");
+        char* n;
+        while(s) {
+            user_first_block = atoi(s);
+            if (user_first_block<0 || user_first_block>=block_count) {
+               fprintf(stderr, "Block number is out of range\n");
+               return 39; 
+            }
+            if (busy_map[user_first_block]) {
+                fprintf(stderr, "Duplicate/used block number\n");
+                return 40;
+            }
+            n = strtok(NULL, ",");
+            if (n) {
+                mark_used_block(user_first_block);
+                int r = load_entries(user_first_block, 1);
+                if (!r) {
+                    fprintf(stderr, "No entries loaded, maybe need better password\n");
+                }
+            }
+            s=n;
+        }    
+    }
+    
     mark_used_block(user_first_block);
     
     current_dirent_array_size = 128;
@@ -1175,7 +1206,7 @@ int main(int argc, char* argv[]) {
         generate_test_dirents();
     }
     else if (!strcmp(argv[2], "--debug-print")) {
-        debug_print_dirents(atoi(argv[3]));        
+        debug_print_dirents(user_first_block);        
     } else {
         int r = load_entries(user_first_block, 0);
         
