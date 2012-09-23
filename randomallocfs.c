@@ -30,6 +30,9 @@ FILE* data;
 const char* rnd_name;
 const char* data_name;
 
+int readonly_flag;
+int dirty_status;
+
 int user_first_block;
 
 /* 0 - free, 1 - busy */
@@ -56,7 +59,7 @@ struct myhandle {
 };
 
 struct mydirent *dirents;
-int current_dirent_size;
+int current_dirent_array_size;
 int dirent_entries_count;
 
 
@@ -119,13 +122,19 @@ void remove_dirent(struct mydirent* ent) {
     --dirent_entries_count;
 }
 
+int get_maximum_path_length();
+
 struct mydirent* create_dirent(const char* path) {
+    if (strlen(path) > get_maximum_path_length()-12) {
+        return NULL;
+    }
+    
     struct mydirent* ent;
-    if (dirent_entries_count < current_dirent_size) {
+    if (dirent_entries_count < current_dirent_array_size) {
         ent = &dirents[dirent_entries_count++];
     } else {
-        current_dirent_size*=2;
-        dirents = realloc(dirents, current_dirent_size*sizeof(*dirents));
+        current_dirent_array_size*=2;
+        dirents = realloc(dirents, current_dirent_array_size*sizeof(*dirents));
         ent = &dirents[dirent_entries_count++];
     }
     ent->full_path = strdup(path);
@@ -144,6 +153,7 @@ int allocate_block(int privileged_mode) {
     int index=0;
     
     if (!privileged_mode && busy_blocks_count*105.0/100.0 >= block_count) {
+        //fprintf(stderr, "Not priv\n");
         return -1; /* out of free space */
     }
     
@@ -159,33 +169,41 @@ int allocate_block(int privileged_mode) {
             }
             busy_map[index] = 1;
             ++busy_blocks_count;
+            //fprintf(stderr, "Normal: %d\n", index);
             return index;
         }
     } 
     
     for(i=index+1; i<block_count; ++i) {
-        if (busy_map[index]) continue;
+        if (busy_map[i]) continue;
+        busy_map[i]=1;
+        //fprintf(stderr, "Alt1: %d\n", i);
         return i;
     }
     
     for(i=0; i<index; ++i) {
-        if (busy_map[index]) continue;
+        if (busy_map[i]) continue;
+        busy_map[i]=1;
+        //fprintf(stderr, "Alt2: %d\n", i);
         return i;        
     }
     
     /* No more free blocks at all */
     
     if (privileged_mode) {
+        readonly_flag = 1;
         /* Emergency measures: expand the storage file to save directory in it */
         fprintf(stderr, "Expanding the data file to store the directory\n");
         ++block_count;
         ++busy_blocks_count;
         int po2 = nearest_power_of_two(block_count);
-        busy_map = realloc(busy_map, po2);
+        busy_map = realloc(busy_map, po2*sizeof(int));
         busy_map[block_count-1]=1;
+        fprintf(stderr, "Emeg: %d\n", block_count-1);
         return block_count-1;
     }
     
+    //fprintf(stderr, "Fail\n");
     return -1; /* out of free space */
 }
 
@@ -281,6 +299,25 @@ int read_block(unsigned char* buffer, int i) {
 }
 
 
+
+int get_maximum_path_length() {
+    size_t dirent_size = 0;
+    dirent_size += 4; /* full_path string length */
+    dirent_size += 8; /* file length */
+    //int bc = get_block_count_for_length(ent->length);
+    //dirent_size += 4*bc; /* block list */
+    
+    dirent_size += 4; /* number of blocks in this extent */
+    dirent_size += 4; /* starting block in this extend */
+    // If we can't save all block numbers in this block, we save further block numbers in next blocks
+    
+    dirent_size+=16; /* there should be room for at least 4 blocks or this is not serious */
+    dirent_size += 4; /* next dirent's block number */
+    dirent_size += 4; /* next dirent's offset in block */ 
+    dirent_size += 8; /* padding for possible extensions */
+    return block_size - BLOCK_HEADER_SIZE - dirent_size;
+}
+
 int get_saved_entry_minimal_size(struct mydirent* ent) {
     size_t dirent_size = 0;
     dirent_size += 4; /* full_path string length */
@@ -303,6 +340,10 @@ int get_saved_entry_minimal_size(struct mydirent* ent) {
 /* Returns first entry's block. -1 on failure */
 int save_entries(int starting_block) {
     int i, j;
+    
+    if (!dirty_status) {
+        return starting_block;
+    }
     
     int allocated_blocks_journal_size=32;
     int *allocated_blocks_journal = (int*) malloc(allocated_blocks_journal_size*sizeof(int));
@@ -335,12 +376,23 @@ int save_entries(int starting_block) {
         struct mydirent* ent = &dirents[i];
         
         int current_dirent_size = next_dirent_size;
+        //fprintf(stderr, "i=%d bs=%d off=%d crs=%d\n", i, block_size, offset, current_dirent_size);
+        if (block_size - offset - current_dirent_size<4) {
+            fprintf(stderr, "Filepath too long for this block size and will be skipped\n");
+             if (i==dirent_entries_count-1) {
+                break;
+            } else {
+                next_dirent_size = get_saved_entry_minimal_size(&dirents[i+1]);
+            }
+            continue;
+        }
         int number_of_blocks_we_will_save = (block_size - offset - current_dirent_size) / sizeof(int);
         if (i==dirent_entries_count-1) {
             next_dirent_size = 0;
         } else {
             next_dirent_size = get_saved_entry_minimal_size(&dirents[i+1]);
         }
+        //fprintf(stderr, "nds=%d\n", next_dirent_size);
         
         int path_string_length = strlen(ent->full_path);
         long long int file_lenght = ent->length;
@@ -363,7 +415,7 @@ int save_entries(int starting_block) {
             *(long int*)(block+offset) = htobe32(ent->blocks[j]); offset+=4;
         }
         position_in_block_list += number_of_blocks_we_will_save;
-        
+        //fprintf(stderr, "Offset: %d\n", offset);
         if (next_dirent_size == 0) {
             *(long int*)(block+offset) = htobe32(0); offset+=4;
             *(long int*)(block+offset) = htobe32(0); offset+=4;
@@ -413,8 +465,14 @@ int save_entries(int starting_block) {
         } else {
             --i;
         }
-        next_dirent_size = current_dirent_size;
     }
+    /*
+    fprintf(stderr, "Dir blocks:");
+    for(i=0; i<saved_directly_blocks_size; ++i) {
+        fprintf(stderr, " %d", saved_directly_blocks[i]);
+    }
+    fprintf(stderr, "\n");
+    */
     
     write_block(block, current_block);
     write_block(first_block_buffer, starting_block);
@@ -426,10 +484,20 @@ int save_entries(int starting_block) {
             mark_unused_block(saved_directly_blocks[i]);
         }
     }
-    saved_directly_blocks_size = allocated_blocks_journal_size;
+    saved_directly_blocks_size = number_of_allocated_blocks;
     free(saved_directly_blocks);
-    saved_directly_blocks = (int*)malloc(saved_directly_blocks_size*sizeof(int*));
-    memcpy(saved_directly_blocks, allocated_blocks_journal, sizeof(int*)*allocated_blocks_journal_size);
+    saved_directly_blocks = (int*)malloc(saved_directly_blocks_size*sizeof(int));
+    memcpy(saved_directly_blocks, allocated_blocks_journal, sizeof(int)*number_of_allocated_blocks);
+    
+    /*
+    fprintf(stderr, "Dir blocks:");
+    for(i=0; i<saved_directly_blocks_size; ++i) {
+        fprintf(stderr, " %d", saved_directly_blocks[i]);
+    }
+    fprintf(stderr, "\n");
+    */
+    
+    dirty_status=0;
     
     free(first_block_buffer);
     free(block_buffer);
@@ -471,6 +539,9 @@ int load_entries(int starting_block, int only_mark_blocks) {
                 free(previous_entry_name);
                 previous_entry_name = path;
                 ent = create_dirent(path);
+                if (!ent) {
+                    fprintf(stderr, "Entry name too long and ignored\n");
+                }
             }
         }
         offset+=pathlen;
@@ -643,6 +714,10 @@ void generate_test_dirents() {
     fprintf(stderr, "%d\n", s);
 }
 
+void raise_alarm() {
+    
+}
+
 void debug_print_dirents(int starting_block) {
     traverse_entries_and_debug_print(starting_block);
     load_entries(starting_block, 1);
@@ -745,12 +820,15 @@ static int xmp_readdir(const char *path, void *buf, fuse_fill_dir_t filler,
 }
 static int xmp_mkdir(const char *path, mode_t mode)
 {
+    if(readonly_flag) return -EROFS;
     struct mydirent* ent = find_dirent(path);
     if(ent) return -EEXIST;
     
     int l = strlen(path);
     
     if(l>PATH_MAX-2) return -ENOSYS;
+        
+    ++dirty_status; raise_alarm();
     
     char buf[PATH_MAX];
     strncpy(buf, path, PATH_MAX);
@@ -761,22 +839,25 @@ static int xmp_mkdir(const char *path, mode_t mode)
     
     ent = create_dirent(buf);
     
-    return 0;
+    return ent?0:-ENAMETOOLONG;
 }
 
 static int xmp_unlink(const char *path)
 {
+    if(readonly_flag) return -EROFS;
     struct mydirent* ent = find_dirent(path);
     if (!ent) return -ENOENT;
     if (is_directory(ent)) return -EISDIR;
     
     remove_dirent(ent);
+    ++dirty_status; raise_alarm();
     
     return 0;
 }
 
 static int xmp_rmdir(const char *path)
 {
+    if(readonly_flag) return -EROFS;
     struct mydirent* ent = find_dirent(path);
     if (!ent) return -ENOENT;
     if (!is_directory(ent)) return -ENOTDIR;
@@ -796,17 +877,21 @@ static int xmp_rmdir(const char *path)
     }
     
     remove_dirent(ent);
+    ++dirty_status; raise_alarm();
     
     return 0;
 }
 static int xmp_rename(const char *from, const char *to)
 {
+    if(readonly_flag) return -EROFS;
     struct mydirent* ent = find_dirent(from);
     struct mydirent* ent2 = find_dirent(to);
         
     if(!ent) return -ENOENT;
     if(ent2) return -ENOTEMPTY;
     
+    if(strlen(to) > get_maximum_path_length()-12) return -ENAMETOOLONG;
+    ++dirty_status; raise_alarm();
     
     int l = strlen(to);
     
@@ -835,10 +920,12 @@ static int xmp_chown(const char *path, uid_t uid, gid_t gid) { return -ENOSYS; }
 
 static int xmp_truncate(const char *path, off_t size)
 {
+    if(readonly_flag) return -EROFS;
     struct mydirent* ent = find_dirent(path);
     if (!ent) return -ENOENT;   
         
     int ret = d_truncate(ent, size);
+    ++dirty_status; raise_alarm();
     if(ret) return 0;
         
 	return -ENOSPC;
@@ -863,6 +950,7 @@ static int xmp_open(const char *path, struct fuse_file_info *fi)
             }
         } else {
             ent = create_dirent(path);
+            if(!ent) return -ENAMETOOLONG;
         }
     } else {
         if (!ent) return -ENOENT;
@@ -924,11 +1012,12 @@ static int xmp_read(const char *path, char *buf, size_t size, off_t offset,
 static int xmp_write(const char *path, const char *buf, size_t size,
 		     off_t offset, struct fuse_file_info *fi)
 {
+    if(readonly_flag) return -EROFS;
     struct myhandle* h = (struct myhandle*)(intptr_t)fi->fh;
     struct mydirent* ent = h->ent;
     
     int ret = ensure_size(ent, offset+size);
-    
+    ++dirty_status;
     if(!ret) return -ENOSPC;
         
     int buf_offset = 0;
@@ -959,6 +1048,11 @@ static int xmp_write(const char *path, const char *buf, size_t size,
         offset+=minilen;
     }
     
+    if(dirty_status > 50) {
+        save_entries(user_first_block);
+    } else {
+        raise_alarm();
+    }
 	return saved_size;
 }
 
@@ -1059,9 +1153,12 @@ int main(int argc, char* argv[]) {
     
     mark_used_block(user_first_block);
     
-    current_dirent_size = 128;
-    dirents = (struct mydirent*) malloc(current_dirent_size * sizeof(*dirents));
+    current_dirent_array_size = 128;
+    dirents = (struct mydirent*) malloc(current_dirent_array_size * sizeof(*dirents));
     dirent_entries_count=0;
+    
+    readonly_flag = 0;
+    dirty_status = 0;
     
     int ret;
     
