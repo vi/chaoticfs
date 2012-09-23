@@ -40,8 +40,8 @@ int user_first_block;
 unsigned char *busy_map;
 int busy_blocks_count;
 
-int *saved_directly_blocks;
-int saved_directly_blocks_size;
+int *saved_directory_blocks;
+int saved_directory_blocks_size;
 
 unsigned char* shred_buffer;
 
@@ -469,8 +469,8 @@ int save_entries(int starting_block) {
     }
     /*
     fprintf(stderr, "Dir blocks:");
-    for(i=0; i<saved_directly_blocks_size; ++i) {
-        fprintf(stderr, " %d", saved_directly_blocks[i]);
+    for(i=0; i<saved_directory_blocks_size; ++i) {
+        fprintf(stderr, " %d", saved_directory_blocks[i]);
     }
     fprintf(stderr, "\n");
     */
@@ -480,20 +480,20 @@ int save_entries(int starting_block) {
     fflush(data);
     fsync(fileno(data));
     
-    for (i=0; i<saved_directly_blocks_size; ++i) {
-        if (saved_directly_blocks[i]!=starting_block) {
-            mark_unused_block(saved_directly_blocks[i]);
+    for (i=0; i<saved_directory_blocks_size; ++i) {
+        if (saved_directory_blocks[i]!=starting_block) {
+            mark_unused_block(saved_directory_blocks[i]);
         }
     }
-    saved_directly_blocks_size = number_of_allocated_blocks;
-    free(saved_directly_blocks);
-    saved_directly_blocks = (int*)malloc(saved_directly_blocks_size*sizeof(int));
-    memcpy(saved_directly_blocks, allocated_blocks_journal, sizeof(int)*number_of_allocated_blocks);
+    saved_directory_blocks_size = number_of_allocated_blocks;
+    free(saved_directory_blocks);
+    saved_directory_blocks = (int*)malloc(saved_directory_blocks_size*sizeof(int));
+    memcpy(saved_directory_blocks, allocated_blocks_journal, sizeof(int)*number_of_allocated_blocks);
     
     /*
     fprintf(stderr, "Dir blocks:");
-    for(i=0; i<saved_directly_blocks_size; ++i) {
-        fprintf(stderr, " %d", saved_directly_blocks[i]);
+    for(i=0; i<saved_directory_blocks_size; ++i) {
+        fprintf(stderr, " %d", saved_directory_blocks[i]);
     }
     fprintf(stderr, "\n");
     */
@@ -1152,8 +1152,8 @@ int main(int argc, char* argv[]) {
     busy_map = (unsigned char*) malloc(block_count);
     busy_blocks_count = 0;
     memset(busy_map, 0, block_count);
-    saved_directly_blocks_size = 0;
-    saved_directly_blocks = NULL;
+    saved_directory_blocks_size = 0;
+    saved_directory_blocks = NULL;
     
     mark_used_block(user_first_block);
     
