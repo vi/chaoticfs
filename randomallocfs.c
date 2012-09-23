@@ -20,6 +20,8 @@
 #include <sys/time.h>
 #include <signal.h>
 
+#include <mcrypt.h>
+
 
 #define SIGNATURE "RndAllV0"
 #define BLOCK_HEADER_SIZE 16
@@ -72,6 +74,11 @@ struct mydirent *dirents;
 int current_dirent_array_size;
 int dirent_entries_count;
 
+char* mcrypt_algo;
+char* mcrypt_mode;
+int mcrypt_blocksize;
+int mcrypt_keysize;
+MCRYPT mcrypt;
 
 int is_directory(const struct mydirent* i) {
     return i->full_path[strlen(i->full_path)-1] == '/';
@@ -1216,6 +1223,24 @@ int main(int argc, char* argv[]) {
     saved_directory_blocks = NULL;
     alarm_triggered = 0;
     
+    {
+        char* mcrypt_algo="rijndael-256";
+        char* mcrypt_mode="cbc";
+        
+
+        if (getenv("MCRYPT_ALGO")) { mcrypt_algo = getenv("MCRYPT_ALGO"); }
+        if (getenv("MCRYPT_MODE")) { mcrypt_mode = getenv("MCRYPT_MODE"); }
+        if (getenv("MCRYPT_KEYSIZE")) { mcrypt_keysize=atoi(getenv("MCRYPT_KEYSIZE"))/8; }
+
+
+        mcrypt = mcrypt_module_open(mcrypt_algo, NULL, mcrypt_mode, NULL);
+        
+        if (mcrypt==MCRYPT_FAILED) {
+            fprintf(stderr, "mcrypt_module_open failed algo=%s mode=%s keysize=%d\n", mcrypt_algo, mcrypt_mode, mcrypt_keysize);
+            return 11;
+        }
+        mcrypt_blocksize = mcrypt_enc_get_block_size(mcrypt);
+    }
     {
         printf("Enter the comma-separated blockpasswords list (example: \"2sK1m49se,5sldmIqaa,853svmqpsd\")\n");
         fgets(passwords_area, sizeof(passwords_area), stdin);
