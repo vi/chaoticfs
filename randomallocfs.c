@@ -33,6 +33,8 @@ const char* data_name;
 
 int readonly_flag;
 int dirty_status;
+int dirty_bytes;
+int max_dirty_bytes;
 
 int user_first_block;
 
@@ -499,6 +501,7 @@ int save_entries(int starting_block) {
     */
     
     dirty_status=0;
+    dirty_bytes=0;
     
     free(first_block_buffer);
     free(block_buffer);
@@ -1049,7 +1052,9 @@ static int xmp_write(const char *path, const char *buf, size_t size,
         offset+=minilen;
     }
     
-    if(dirty_status > 50) {
+    dirty_bytes+=saved_size;
+    
+    if(dirty_bytes > max_dirty_bytes) {
         save_entries(user_first_block);
     } else {
         raise_alarm();
@@ -1123,9 +1128,11 @@ char passwords_area[65536];
 int main(int argc, char* argv[]) {
     block_size = 4096;
     rnd_name = "/dev/urandom";
+    max_dirty_bytes = 4000000;
     
     if (getenv("BLOCK_SIZE"))  block_size = atoi(getenv("BLOCK_SIZE"));
     if (getenv("RANDOM_FILE")) rnd_name = getenv("RANDOM_FILE");
+    if (getenv("MAX_DIRTY_BYTES")) max_dirty_bytes = atoi(getenv("MAX_DIRTY_BYTES"));
         
     if (argc < 3) {
         fprintf(stderr, "Usage: [BLOCK_SIZE=1024] [RANDOM_FILE=/dev/urandom] randomallocfs data_file mountpoint [FUSE options]\n");
