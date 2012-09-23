@@ -41,6 +41,7 @@ int max_dirty_calls;
 int dirty_alarm_timeout;
 int no_shred;
 int no_sync;
+int reserved_percent;
 
 int user_first_block;
 
@@ -162,7 +163,7 @@ int allocate_block(int privileged_mode) {
     int i;
     int index=0;
     
-    if (!privileged_mode && busy_blocks_count*105.0/100.0 >= block_count) {
+    if (!privileged_mode && busy_blocks_count*100.0 >= block_count*(100.0-reserved_percent)) {
         //fprintf(stderr, "Not priv\n");
         return -1; /* out of free space */
     }
@@ -1172,6 +1173,7 @@ int main(int argc, char* argv[]) {
     no_shred = 0;
     no_sync = 0;
     dirty_alarm_timeout=5;
+    reserved_percent=5;
     
     if (getenv("BLOCK_SIZE"))  block_size = atoi(getenv("BLOCK_SIZE"));
     if (getenv("RANDOM_FILE")) rnd_name = getenv("RANDOM_FILE");
@@ -1180,6 +1182,7 @@ int main(int argc, char* argv[]) {
     if (getenv("DIRTY_ALARM")) dirty_alarm_timeout = atoi(getenv("DIRTY_ALARM"));
     if (getenv("NO_SHRED")) no_shred=1;
     if (getenv("NO_SYNC")) no_sync=1;
+    if (getenv("RESERVED_PERCENT")) reserved_percent = atoi(getenv("RESERVED_PERCENT"));
         
     if (argc < 3) {
         fprintf(stderr, "Usage: [BLOCK_SIZE=1024] [RANDOM_FILE=/dev/urandom] randomallocfs data_file mountpoint [FUSE options]\n");
