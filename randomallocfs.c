@@ -27,15 +27,16 @@
 int block_count;
 int block_size;
 FILE* rnd;
-FILE* data;
+int data;
 const char* rnd_name;
 const char* data_name;
 
 int readonly_flag;
-int dirty_status;
-int dirty_bytes;
+volatile int dirty_status;
+volatile int dirty_bytes;
 int max_dirty_bytes;
 int max_dirty_calls;
+int dirty_alarm_timeout;
 int no_shred;
 int alarm_triggered;
 
@@ -297,13 +298,35 @@ int d_truncate(struct mydirent* ent, long long int size) {
 }
 
 int write_block(const unsigned char* buffer, int i) {
-    fseek(data, i*block_size, SEEK_SET);
-    return block_size == fwrite(buffer, 1, block_size, data);
+    int fd = data;
+    off_t off = i*block_size;
+    size_t s = block_size;
+    while(s) {
+        int ret = pwrite(fd, buffer, s, off);
+        if (ret<=0) {
+            if (errno==EINTR || errno==EAGAIN) continue;
+            return 0;
+        }
+        off+=ret;
+        s-=ret;
+    }
+    return 1;
 }
 
 int read_block(unsigned char* buffer, int i) {
-    fseek(data, i*block_size, SEEK_SET);
-    return block_size == fread(buffer, 1, block_size, data);
+    int fd = data;
+    off_t off = i*block_size;
+    size_t s = block_size;
+    while(s) {
+        int ret = pread(fd, buffer, s, off);
+        if (ret<=0) {
+            if (errno==EINTR || errno==EAGAIN) continue;
+            return 0;
+        }
+        off+=ret;
+        s-=ret;
+    }
+    return 1;
 }
 
 
@@ -352,6 +375,12 @@ int save_entries(int starting_block) {
     if (!dirty_status) {
         return starting_block;
     }
+    
+    /* Need to do this early to prevent stray SIGALRM re-enter save_entries */
+    dirty_status=0;
+    dirty_bytes=0;
+    
+    
     
     int allocated_blocks_journal_size=32;
     int *allocated_blocks_journal = (int*) malloc(allocated_blocks_journal_size*sizeof(int));
@@ -484,8 +513,7 @@ int save_entries(int starting_block) {
     
     write_block(block, current_block);
     write_block(first_block_buffer, starting_block);
-    fflush(data);
-    fdatasync(fileno(data));
+    fdatasync(data);
     
     for (i=0; i<saved_directory_blocks_size; ++i) {
         if (saved_directory_blocks[i]!=starting_block) {
@@ -504,9 +532,6 @@ int save_entries(int starting_block) {
     }
     fprintf(stderr, "\n");
     */
-    
-    dirty_status=0;
-    dirty_bytes=0;
     
     free(first_block_buffer);
     free(block_buffer);
@@ -725,7 +750,7 @@ void generate_test_dirents() {
 
 void raise_alarm() {
     if(!alarm_triggered) {
-        alarm(5);
+        alarm(dirty_alarm_timeout);
         alarm_triggered=1;
     }
 }
@@ -1029,7 +1054,6 @@ static int xmp_write(const char *path, const char *buf, size_t size,
     struct mydirent* ent = h->ent;
     
     int ret = ensure_size(ent, offset+size);
-    ++dirty_status;
     if(!ret) return -ENOSPC;
         
     int buf_offset = 0;
@@ -1061,6 +1085,7 @@ static int xmp_write(const char *path, const char *buf, size_t size,
     }
     
     dirty_bytes+=saved_size;
+    ++dirty_status;
     
     if (dirty_bytes > max_dirty_bytes || dirty_status > max_dirty_calls) {
         save_entries(user_first_block);
@@ -1140,11 +1165,13 @@ int main(int argc, char* argv[]) {
     max_dirty_bytes = 1000000;
     max_dirty_calls = 1000;
     no_shred = 0;
+    dirty_alarm_timeout=5;
     
     if (getenv("BLOCK_SIZE"))  block_size = atoi(getenv("BLOCK_SIZE"));
     if (getenv("RANDOM_FILE")) rnd_name = getenv("RANDOM_FILE");
     if (getenv("MAX_DIRTY_BYTES")) max_dirty_bytes = atoi(getenv("MAX_DIRTY_BYTES"));
     if (getenv("MAX_DIRTY_CALLS")) max_dirty_calls = atoi(getenv("MAX_DIRTY_CALLS"));
+    if (getenv("DIRTY_ALARM")) dirty_alarm_timeout = atoi(getenv("DIRTY_ALARM"));
     if (getenv("NO_SHRED")) no_shred=1;
         
     if (argc < 3) {
@@ -1157,12 +1184,13 @@ int main(int argc, char* argv[]) {
     
     rnd= fopen(rnd_name, "rb");
     if(!rnd) { perror("fopen random"); return 2; }
-    data = fopen(data_name, "rb+");
-    if(!data) { perror("fopen data"); return 3; }
+    data = open(data_name, O_RDWR, 0777);
+    if(data<0) { perror("open data"); return 3; }
     
     {
-        fseek(data, 0, SEEK_END);
-        long long int len = ftell(data);
+        struct stat st;
+        fstat(data,  &st);
+        long long int len = st.st_size;
         block_count = (len / block_size);
         if (block_count<1) {
             fprintf(stderr, "Data file is empty. It should be pre-initialized with random data\n");
@@ -1254,7 +1282,7 @@ int main(int argc, char* argv[]) {
     
     free(dirents);
     free(busy_map);
-    fclose(data);
+    close(data);
     fclose(rnd);
     return ret;
 }
