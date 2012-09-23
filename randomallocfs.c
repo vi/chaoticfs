@@ -37,6 +37,7 @@ int dirty_bytes;
 int max_dirty_bytes;
 int max_dirty_calls;
 int no_shred;
+int alarm_triggered;
 
 int user_first_block;
 
@@ -723,7 +724,10 @@ void generate_test_dirents() {
 }
 
 void raise_alarm() {
-    alarm(5);
+    if(!alarm_triggered) {
+        alarm(5);
+        alarm_triggered=1;
+    }
 }
 
 void debug_print_dirents(int starting_block) {
@@ -1125,6 +1129,7 @@ static struct fuse_operations xmp_oper = {
 
 void sigalm() {
     save_entries(user_first_block);
+    alarm_triggered=0;
 }
 
 char passwords_area[65536];
@@ -1133,7 +1138,7 @@ int main(int argc, char* argv[]) {
     block_size = 4096;
     rnd_name = "/dev/urandom";
     max_dirty_bytes = 1000000;
-    max_dirty_calls = 100;
+    max_dirty_calls = 1000;
     no_shred = 0;
     
     if (getenv("BLOCK_SIZE"))  block_size = atoi(getenv("BLOCK_SIZE"));
@@ -1171,6 +1176,7 @@ int main(int argc, char* argv[]) {
     memset(busy_map, 0, block_count);
     saved_directory_blocks_size = 0;
     saved_directory_blocks = NULL;
+    alarm_triggered = 0;
     
     {
         printf("Enter the comma-separated blockpasswords list (example: \"2sK1m49se,5sldmIqaa,853svmqpsd\")\n");
