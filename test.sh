@@ -9,7 +9,7 @@ function setup() {
     fusermount -u m 2> /dev/null || true
     mkdir -p m
     dd if=/dev/zero of=s bs=1024 count=1024 2> /dev/null
-    ./randomallocfs s m 2> /dev/null
+    echo "2test" | ./randomallocfs s m  > /dev/null 2> /dev/null
 }
 
 function teardown() {
@@ -67,7 +67,7 @@ setup
 echo qqq > m/qqq
 mkdir m/ddd
 fusermount -u m
-./randomallocfs s m
+echo "2test" | ./randomallocfs s m > /dev/null
 diff -u - <(find m -printf '%y %M %n %s %P %Cs %As %Ts\n') <<\EOF
 d drwxr-x--- 0 0  0 0 0
 f -rwxr-x--- 0 4 qqq 0 0 0
@@ -82,29 +82,35 @@ SIZE=`find m/file -printf '%s'`
 echo "  Uses space: " $((SIZE*100/1024/1024)) "%"
 fusermount -u m
 sleep 1 # XXX
-./randomallocfs s m
+echo "2test" | ./randomallocfs s m > /dev/null
 SIZE2=`find m/file -printf '%s'`
 test "$SIZE" == "$SIZE2"
 diff -u <(yes 123456789 | nl | chopfile "$SIZE") m/file
 teardown
 
+
 echo "Sudden shutdown test"
 dd if=/dev/zero of=s bs=1024 count=102400 2> /dev/null
 mkdir -p m
-./randomallocfs s m 2> /dev/null
-PID=`pgrep -f 'randomallocfs s m'`
-yes 123456789 | nl | measuretransferred > m/file 2> stats&
+echo "2test" | ./randomallocfs s m > /dev/null 2> /dev/null
+
+dd if=/dev/urandom bs=1024 count=128 of=randomlet 2> /dev/null
+rm -f testfile
+for((i=0; i<300; ++i)) { echo $i >> testfile; cat randomlet >> testfile; }
+rm randomlet;
+
+cat testfile | measuretransferred > m/file 2> stats&
 sleep 5
-#killall -9 randomallocfs
 pkill -9 -f 'randomallocfs s m'
-sleep 1
+sleep 2
 fusermount -u m
-./randomallocfs s m
+echo "2test" | ./randomallocfs s m > /dev/null
 SIZE=$(<stats)
-rm stats
 SIZE2=`find m/file -printf '%s'`
 echo "    Lost bytes: " $((SIZE-SIZE2)) " of $SIZE"
-diff -u <(yes 123456789 | nl | chopfile "$SIZE2") m/file
+diff -u <(cat testfile | chopfile "$SIZE2") m/file
+rm testfile
+rm stats
 teardown
 
 }
