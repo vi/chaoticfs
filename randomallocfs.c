@@ -485,7 +485,7 @@ int save_entries(int starting_block) {
     write_block(block, current_block);
     write_block(first_block_buffer, starting_block);
     fflush(data);
-    fsync(fileno(data));
+    fdatasync(fileno(data));
     
     for (i=0; i<saved_directory_blocks_size; ++i) {
         if (saved_directory_blocks[i]!=starting_block) {

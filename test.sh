@@ -77,7 +77,7 @@ teardown
 
 echo "ENOSPC test"
 setup
-yes 123456789 | nl | cat > m/file || true
+yes ABCDEFGH | nl | cat > m/file || true
 SIZE=`find m/file -printf '%s'`
 echo "  Uses space: " $((SIZE*100/1024/1024)) "%"
 fusermount -u m
@@ -85,7 +85,7 @@ sleep 1 # XXX
 echo "2test" | ./randomallocfs s m > /dev/null
 SIZE2=`find m/file -printf '%s'`
 test "$SIZE" == "$SIZE2"
-diff -u <(yes 123456789 | nl | chopfile "$SIZE") m/file
+diff -u <(yes ABCDEFGH | nl | chopfile "$SIZE") m/file
 teardown
 
 
@@ -102,14 +102,14 @@ rm randomlet;
 cat testfile | measuretransferred > m/file 2> stats&
 sleep 4
 pkill -9 -f 'randomallocfs s m'
-sleep 2
-fusermount -u m
+sleep 1
+fusermount -u m || { sleep 2 && fusermount -u m; } || { sleep 10 && fusermount -u m; }
 echo "2test" | ./randomallocfs s m > /dev/null
 SIZE=$(<stats)
-SIZE2=`find m/file -printf '%s'`
 if [ ! -e m/file ]; then
     echo "    All $SIZE bytes lost";
 else
+    SIZE2=`find m/file -printf '%s'`
     echo "    Lost bytes: " $((SIZE-SIZE2)) " of $SIZE"
     diff -u <(cat testfile | chopfile "$SIZE2") m/file
 fi
