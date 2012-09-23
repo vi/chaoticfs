@@ -36,6 +36,7 @@ int dirty_status;
 int dirty_bytes;
 int max_dirty_bytes;
 int max_dirty_calls;
+int no_shred;
 
 int user_first_block;
 
@@ -222,6 +223,7 @@ void mark_unused_block(int i) {
 }
 
 void shred_block(int i) {
+    if (no_shred) return;
     fread(shred_buffer, 1, block_size, rnd);
     write_block(shred_buffer, i);
 }
@@ -1132,11 +1134,13 @@ int main(int argc, char* argv[]) {
     rnd_name = "/dev/urandom";
     max_dirty_bytes = 1000000;
     max_dirty_calls = 100;
+    no_shred = 0;
     
     if (getenv("BLOCK_SIZE"))  block_size = atoi(getenv("BLOCK_SIZE"));
     if (getenv("RANDOM_FILE")) rnd_name = getenv("RANDOM_FILE");
     if (getenv("MAX_DIRTY_BYTES")) max_dirty_bytes = atoi(getenv("MAX_DIRTY_BYTES"));
     if (getenv("MAX_DIRTY_CALLS")) max_dirty_calls = atoi(getenv("MAX_DIRTY_CALLS"));
+    if (getenv("NO_SHRED")) no_shred=1;
         
     if (argc < 3) {
         fprintf(stderr, "Usage: [BLOCK_SIZE=1024] [RANDOM_FILE=/dev/urandom] randomallocfs data_file mountpoint [FUSE options]\n");
