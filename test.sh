@@ -94,7 +94,7 @@ mkdir -p m
 ./randomallocfs s m 2> /dev/null
 PID=`pgrep -f 'randomallocfs s m'`
 yes 123456789 | nl | measuretransferred > m/file 2> stats&
-sleep 2
+sleep 5
 #killall -9 randomallocfs
 pkill -9 -f 'randomallocfs s m'
 sleep 1
