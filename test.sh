@@ -100,15 +100,19 @@ for((i=0; i<300; ++i)) { echo $i >> testfile; cat randomlet >> testfile; }
 rm randomlet;
 
 cat testfile | measuretransferred > m/file 2> stats&
-sleep 5
+sleep 4
 pkill -9 -f 'randomallocfs s m'
 sleep 2
 fusermount -u m
 echo "2test" | ./randomallocfs s m > /dev/null
 SIZE=$(<stats)
 SIZE2=`find m/file -printf '%s'`
-echo "    Lost bytes: " $((SIZE-SIZE2)) " of $SIZE"
-diff -u <(cat testfile | chopfile "$SIZE2") m/file
+if [ ! -e m/file ]; then
+    echo "    All $SIZE bytes lost";
+else
+    echo "    Lost bytes: " $((SIZE-SIZE2)) " of $SIZE"
+    diff -u <(cat testfile | chopfile "$SIZE2") m/file
+fi
 rm testfile
 rm stats
 teardown
