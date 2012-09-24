@@ -100,7 +100,7 @@ for((i=0; i<300; ++i)) { echo $i >> testfile; cat randomlet >> testfile; }
 rm randomlet;
 
 cat testfile | measuretransferred > m/file 2> stats&
-sleep 4
+sleep 20 # adjust this it your computer is too fast
 pkill -9 -f 'randomallocfs s m'
 sleep 1
 fusermount -u m || { sleep 2 && fusermount -u m; } || { sleep 10 && fusermount -u m; }
