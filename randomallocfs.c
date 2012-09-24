@@ -83,7 +83,7 @@ int mcrypt_keysize=256;
 
 int hash_algo = MHASH_SHA256;
 int keygen_algo = KEYGEN_S2K_ISALTED;
-int keygen_count= 200;
+int keygen_count= 190;
 char* keygen_salt = "RandomAllocFS_m2slLmqisccCaqnzpwkkkemsdffnqpalstteqkleeqwelfs";
 char* mcrypt_initvect=
     "\x1d\xcb\x85\x06\xd0\x55\x95\xbd\xbd\xc6\xc2\x97\xa5\x72\xff\x1b\x4e\x0b\x86\x0c\x88\x41\xa3\xc2\xab\x4a\x92\xaf\xf0\x52"
@@ -98,7 +98,8 @@ char* mcrypt_initvect=
     "\x79\x09\xb5\xf4\x53\xf4\x1d\x4b\x38\x60\xb0\x47\x36\xe3\x15\x56\x52\x2d\x7b\xa6\x19\x1e\x08\xe7\x87\x2a\xbb\x6e\xe5\x4f"
     ;
 char* mcrypt_key = NULL;
-
+unsigned char* mcrypt_buf = NULL;
+unsigned char* mcrypt_ivbuf = NULL;
 
         
 MCRYPT mcrypt = MCRYPT_FAILED;
@@ -136,6 +137,7 @@ void copy_dirent(struct mydirent* dst, struct mydirent* src) {
 int get_block_count_for_length(long long int size);
 void mark_unused_block(int i);
 int write_block(const unsigned char* buffer, int i);
+int write_block_ll(const unsigned char* buffer, int i);
 int nearest_power_of_two(int s);
 void shred_block(int i);
 
@@ -260,7 +262,7 @@ void mark_unused_block(int i) {
 void shred_block(int i) {
     if (no_shred) return;
     fread(shred_buffer, 1, block_size, rnd);
-    write_block(shred_buffer, i);
+    write_block_ll(shred_buffer, i);
 }
 
 void mark_used_block(int i) {
@@ -330,7 +332,7 @@ int d_truncate(struct mydirent* ent, long long int size) {
     return 1;
 }
 
-int write_block(const unsigned char* buffer, int i) {
+int write_block_ll(const unsigned char* buffer, int i) {
     int fd = data;
     off_t off = i*block_size;
     size_t s = block_size;
@@ -346,7 +348,29 @@ int write_block(const unsigned char* buffer, int i) {
     return 1;
 }
 
-int read_block(unsigned char* buffer, int i) {
+int write_block(const unsigned char* buffer, int i) {
+    if (mcrypt == MCRYPT_FAILED) {
+        return write_block_ll(buffer, i);
+    } else {
+        memcpy(mcrypt_buf, buffer, block_size);
+        memcpy(mcrypt_ivbuf, mcrypt_initvect, mcrypt_ivsize);
+        *((unsigned long int*)mcrypt_ivbuf) ^= htobe32(i);
+        
+        if(mcrypt_generic_init(mcrypt, mcrypt_key, mcrypt_keysize/8, mcrypt_ivbuf) < 0) {
+            fprintf(stderr, "Encryption init error\n");
+            return 0;
+        }
+        if(mcrypt_generic (mcrypt, mcrypt_buf, block_size) < 0) {
+            fprintf(stderr, "Encryption error\n");
+            return 0;
+        }
+        mcrypt_generic_deinit(mcrypt);
+        
+        return write_block_ll(mcrypt_buf, i);
+    }
+}
+
+int read_block_ll(unsigned char* buffer, int i) {
     int fd = data;
     off_t off = i*block_size;
     size_t s = block_size;
@@ -362,7 +386,24 @@ int read_block(unsigned char* buffer, int i) {
     return 1;
 }
 
-
+int read_block(unsigned char* buffer, int i) {
+    if (mcrypt == MCRYPT_FAILED) {
+        return read_block_ll(buffer, i);
+    } else {
+        int ret = read_block_ll(mcrypt_buf, i);
+        if (!ret) return 0;
+            
+        memcpy(mcrypt_ivbuf, mcrypt_initvect, mcrypt_ivsize);
+        *((unsigned long int*)mcrypt_ivbuf) ^= htobe32(i);
+        
+        if(mcrypt_generic_init(mcrypt, mcrypt_key, mcrypt_keysize/8, mcrypt_ivbuf) < 0) return 0;
+        if(mdecrypt_generic (mcrypt, mcrypt_buf, block_size) < 0) return 0;
+        mcrypt_generic_deinit(mcrypt);
+        
+        memcpy(buffer, mcrypt_buf, block_size);    
+        return 0;
+    }
+}
 
 int get_maximum_path_length() {
     size_t dirent_size = 0;
@@ -1113,11 +1154,16 @@ static int xmp_write(const char *path, const char *buf, size_t size,
             
         memcpy(h->tmpbuf + minioffset, buf+buf_offset, minilen);
         
-        write_block((unsigned char*)h->tmpbuf, ent->blocks[block_number]);
+        int ret = write_block((unsigned char*)h->tmpbuf, ent->blocks[block_number]);
         
-        buf_offset += minilen;
-        size-=minilen;
-        offset+=minilen;
+        if (ret) {
+            buf_offset += minilen;
+            size-=minilen;
+            offset+=minilen;
+        } else {
+            readonly_flag = 1;
+            return -EINVAL;
+        }
     }
     
     dirty_bytes+=saved_size;
@@ -1265,8 +1311,7 @@ int main(int argc, char* argv[]) {
                 return 11;
             }
             mcrypt_blocksize = mcrypt_enc_get_block_size(mcrypt);
-            mcrypt_ivsize = mcrypt_enc_get_iv_size(mcrypt);
-            
+            mcrypt_ivsize = mcrypt_enc_get_iv_size(mcrypt);            
         }
     }
     {
@@ -1290,6 +1335,12 @@ int main(int argc, char* argv[]) {
                 if (!mcrypt_key) {
                     mcrypt_key = (char*)malloc(mcrypt_keysize);
                 }
+                if (!mcrypt_buf) {
+                    mcrypt_buf = (unsigned char*) malloc(block_size);
+                }
+                if (!mcrypt_ivbuf) {
+                    mcrypt_ivbuf = (unsigned char*) malloc(mcrypt_ivsize);
+                }
                 
                 KEYGEN kg;
                 kg.hash_algorithm[0]=hash_algo;
@@ -1300,7 +1351,7 @@ int main(int argc, char* argv[]) {
                 
                 int ret = mhash_keygen_ext(keygen_algo, kg, mcrypt_key, mcrypt_keysize, (unsigned char*)s, strlen(s));
                 
-                if (!ret) {
+                if (ret!=0) {
                     fprintf(stderr, "Failed to generate key for password\n");
                     perror("mhash_keygen_ext");
                     return 42;
@@ -1346,7 +1397,10 @@ int main(int argc, char* argv[]) {
         if (!r) {
             fprintf(stderr, "No entries loaded, creating default entry\n");
             create_dirent("/");
+        } else {
+            printf("Directory loaded successfully\n");
         }
+        
         
         #define MY 2
         char** new_argv = (char**)malloc( (argc-1+MY+1) * sizeof(char*));
