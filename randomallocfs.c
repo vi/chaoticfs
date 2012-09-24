@@ -1194,6 +1194,10 @@ static int xmp_release(const char *path, struct fuse_file_info *fi)
         
     free(h->tmpbuf);
     free(h);
+    
+    if (dirty_bytes>0) {
+        save_entries();
+    }
 	return 0;
 }
 
