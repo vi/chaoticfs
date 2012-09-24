@@ -3,6 +3,7 @@
 // Vitaly "_Vi" Shukela; License=MIT; 2012.
 
 #define FUSE_USE_VERSION 26
+#define _GNU_SOURCE
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -340,6 +341,7 @@ int write_block_ll(const unsigned char* buffer, int i) {
         int ret = pwrite(fd, buffer, s, off);
         if (ret<=0) {
             if (errno==EINTR || errno==EAGAIN) continue;
+            perror("pwrite");
             return 0;
         }
         off+=ret;
@@ -349,10 +351,10 @@ int write_block_ll(const unsigned char* buffer, int i) {
 }
 
 int write_block(const unsigned char* buffer, int i) {
+    memcpy(mcrypt_buf, buffer, block_size);
     if (mcrypt == MCRYPT_FAILED) {
-        return write_block_ll(buffer, i);
+        return write_block_ll(mcrypt_buf, i);
     } else {
-        memcpy(mcrypt_buf, buffer, block_size);
         memcpy(mcrypt_ivbuf, mcrypt_initvect, mcrypt_ivsize);
         *((unsigned long int*)mcrypt_ivbuf) ^= htobe32(i);
         
@@ -387,8 +389,10 @@ int read_block_ll(unsigned char* buffer, int i) {
 }
 
 int read_block(unsigned char* buffer, int i) {
+    int ret = read_block_ll(mcrypt_buf, i);
+    if (!ret) return 0;
     if (mcrypt == MCRYPT_FAILED) {
-        return read_block_ll(buffer, i);
+        memcpy(buffer, mcrypt_buf, block_size);   
     } else {
         int ret = read_block_ll(mcrypt_buf, i);
         if (!ret) return 0;
@@ -399,10 +403,9 @@ int read_block(unsigned char* buffer, int i) {
         if(mcrypt_generic_init(mcrypt, mcrypt_key, mcrypt_keysize/8, mcrypt_ivbuf) < 0) return 0;
         if(mdecrypt_generic (mcrypt, mcrypt_buf, block_size) < 0) return 0;
         mcrypt_generic_deinit(mcrypt);
-        
-        memcpy(buffer, mcrypt_buf, block_size);    
-        return 0;
     }
+    memcpy(buffer, mcrypt_buf, block_size);    
+    return 0;
 }
 
 int get_maximum_path_length() {
@@ -1196,7 +1199,7 @@ static int xmp_release(const char *path, struct fuse_file_info *fi)
     free(h);
     
     if (dirty_bytes>0) {
-        save_entries();
+        save_entries(user_first_block);
     }
 	return 0;
 }
@@ -1265,7 +1268,9 @@ int main(int argc, char* argv[]) {
     if (getenv("RESERVED_PERCENT")) reserved_percent = atoi(getenv("RESERVED_PERCENT"));
         
     if (argc < 3) {
-        fprintf(stderr, "Usage: [BLOCK_SIZE=1024] [RANDOM_FILE=/dev/urandom] randomallocfs data_file mountpoint [FUSE options]\n");
+        fprintf(stderr, "Usage: randomallocfs data_file mountpoint [FUSE options]\n");
+        fprintf(stderr, "Environment variables:\n");
+        fprintf(stderr, "   BLOCK_SIZE=%d", 4096);
         return 1;
     }
     
@@ -1274,7 +1279,7 @@ int main(int argc, char* argv[]) {
     
     rnd= fopen(rnd_name, "rb");
     if(!rnd) { perror("fopen random"); return 2; }
-    data = open(data_name, O_RDWR, 0777);
+    data = open(data_name, O_RDWR|O_DIRECT, 0777);
     if(data<0) { perror("open data"); return 3; }
     
     {
@@ -1290,6 +1295,7 @@ int main(int argc, char* argv[]) {
     
     shred_buffer = (unsigned char*) malloc(block_size);
     busy_map = (unsigned char*) malloc(block_count);
+    mcrypt_buf = (unsigned char*) valloc(block_size);
     busy_blocks_count = 0;
     memset(busy_map, 0, block_count);
     saved_directory_blocks_size = 0;
@@ -1339,9 +1345,6 @@ int main(int argc, char* argv[]) {
                 if (!mcrypt_key) {
                     mcrypt_key = (char*)malloc(mcrypt_keysize);
                 }
-                if (!mcrypt_buf) {
-                    mcrypt_buf = (unsigned char*) malloc(block_size);
-                }
                 if (!mcrypt_ivbuf) {
                     mcrypt_ivbuf = (unsigned char*) malloc(mcrypt_ivsize);
                 }
@@ -1360,6 +1363,14 @@ int main(int argc, char* argv[]) {
                     perror("mhash_keygen_ext");
                     return 42;
                 }
+                
+                //ret = mcrypt_generic_init(mcrypt, mcrypt_key, mcrypt_keysize/8, NULL);
+                
+                /*if (ret) {
+                    mcrypt_perror(ret);
+                    return 44;
+                }*/
+                
             }
             n = strtok(NULL, ",");
             if (n) {
@@ -1369,6 +1380,7 @@ int main(int argc, char* argv[]) {
                     fprintf(stderr, "No entries loaded for auxilary branch, maybe need better password\n");
                     return 43;
                 }
+                //mcrypt_generic_deinit(mcrypt);
             }
             s=n;
         }    
