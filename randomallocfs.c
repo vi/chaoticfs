@@ -1235,7 +1235,7 @@ static struct fuse_operations xmp_oper = {
 };
 
 void sigalm() {
-    save_entries(user_first_block);
+    //save_entries(user_first_block);
     alarm_triggered=0;
 }
 
