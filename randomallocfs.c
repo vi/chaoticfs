@@ -21,6 +21,7 @@
 #include <signal.h>
 
 #include <mcrypt.h>
+#include <mhash.h>
 
 
 #define SIGNATURE "RndAllV0"
@@ -74,11 +75,33 @@ struct mydirent *dirents;
 int current_dirent_array_size;
 int dirent_entries_count;
 
-char* mcrypt_algo;
-char* mcrypt_mode;
+char* mcrypt_algo="rijndael-256";
+char* mcrypt_mode="cbc";
 int mcrypt_blocksize;
-int mcrypt_keysize;
-MCRYPT mcrypt;
+int mcrypt_ivsize;
+int mcrypt_keysize=256;
+
+int hash_algo = MHASH_SHA256;
+int keygen_algo = KEYGEN_S2K_ISALTED;
+int keygen_count= 200;
+char* keygen_salt = "RandomAllocFS_m2slLmqisccCaqnzpwkkkemsdffnqpalstteqkleeqwelfs";
+char* mcrypt_initvect=
+    "\x1d\xcb\x85\x06\xd0\x55\x95\xbd\xbd\xc6\xc2\x97\xa5\x72\xff\x1b\x4e\x0b\x86\x0c\x88\x41\xa3\xc2\xab\x4a\x92\xaf\xf0\x52"
+    "\x00\x59\xa3\x45\xa0\xb5\x79\x40\xaa\x9c\xd1\x11\x25\x61\xaf\x5b\xca\xce\xed\xbb\x32\xc2\x1c\x2d\xe8\xd0\xff\x0f\x50\xa2"
+    "\x80\xc0\xc2\x12\x5d\x36\xc5\x49\x99\xab\x2d\xef\xd7\x87\x3d\x50\x35\x91\xcc\x0d\x42\x07\x76\x86\xbe\x00\x9a\xf0\xf2\x09"
+    "\xbe\x0c\x88\xda\x0f\x44\x13\x9a\x9b\x8c\x5f\x90\x38\x42\x09\xdf\x65\xf3\xf5\x43\x5a\xbb\x78\x55\xbb\xfa\x4a\x2c\x50\xe7"
+    "\x75\x56\x39\xcd\x6c\x46\x59\x24\xa6\xb0\xad\x39\x39\xe3\x9b\x32\xaa\x70\xd1\x4d\x68\x5f\xfa\x59\x72\x8a\x2f\xc4\x8b\x63"
+    "\xd3\x2e\xf2\x4d\x86\x16\x7a\x4c\x1c\x3f\x83\x46\xea\xb3\xf7\xb7\x0a\xc9\x64\x8e\x14\xe1\x2b\x37\x7b\xc1\xb6\x60\x16\x04"
+    "\x06\xf6\xbd\xef\xec\x96\x17\x42\xbf\x5b\x97\x94\x7e\x68\xfd\xa6\xbe\xab\xa5\xd4\x72\x35\x61\x1b\xad\x61\x95\x47\xce\xb2"
+    "\xd3\xf5\x8d\x24\xca\xb6\x83\x42\xb6\xe1\xf6\xcf\xcc\x9c\xa0\x23\x04\x8a\x14\xd7\xc9\x4f\xfe\x80\x1d\xaf\xd2\x04\x3c\xde"
+    "\x44\xd4\x6f\xa8\xc5\xd7\xf5\x93\xe4\x6f\xd4\xe9\xa9\xc9\x18\x8a\xf1\xb3\xba\x5b\x7a\x00\x77\xb0\x6b\xb5\xa8\xf1\x18\xdd"
+    "\x79\x09\xb5\xf4\x53\xf4\x1d\x4b\x38\x60\xb0\x47\x36\xe3\x15\x56\x52\x2d\x7b\xa6\x19\x1e\x08\xe7\x87\x2a\xbb\x6e\xe5\x4f"
+    ;
+char* mcrypt_key = NULL;
+
+
+        
+MCRYPT mcrypt = MCRYPT_FAILED;
 
 int is_directory(const struct mydirent* i) {
     return i->full_path[strlen(i->full_path)-1] == '/';
@@ -1224,22 +1247,27 @@ int main(int argc, char* argv[]) {
     alarm_triggered = 0;
     
     {
-        char* mcrypt_algo="rijndael-256";
-        char* mcrypt_mode="cbc";
-        
-
         if (getenv("MCRYPT_ALGO")) { mcrypt_algo = getenv("MCRYPT_ALGO"); }
         if (getenv("MCRYPT_MODE")) { mcrypt_mode = getenv("MCRYPT_MODE"); }
         if (getenv("MCRYPT_KEYSIZE")) { mcrypt_keysize=atoi(getenv("MCRYPT_KEYSIZE"))/8; }
-
-
-        mcrypt = mcrypt_module_open(mcrypt_algo, NULL, mcrypt_mode, NULL);
+        if (getenv("HASH_ALGO")) { hash_algo=atoi(getenv("HASH_ALGO")); }
+        if (getenv("KEYGEN_ALGO")) { keygen_algo=atoi(getenv("KEYGEN_ALGO")); }
+        if (getenv("KEYGEN_COUNT")) { keygen_count=atoi(getenv("KEYGEN_COUNT")); }
+        if (getenv("KEYGEN_SALT")) { keygen_salt=getenv("KEYGEN_SALT"); }
         
-        if (mcrypt==MCRYPT_FAILED) {
-            fprintf(stderr, "mcrypt_module_open failed algo=%s mode=%s keysize=%d\n", mcrypt_algo, mcrypt_mode, mcrypt_keysize);
-            return 11;
+
+        if (strcmp(mcrypt_algo, "none") && strcmp(mcrypt_mode, "none")) {
+
+            mcrypt = mcrypt_module_open(mcrypt_algo, NULL, mcrypt_mode, NULL);
+            
+            if (mcrypt==MCRYPT_FAILED) {
+                fprintf(stderr, "mcrypt_module_open failed algo=%s mode=%s keysize=%d\n", mcrypt_algo, mcrypt_mode, mcrypt_keysize);
+                return 11;
+            }
+            mcrypt_blocksize = mcrypt_enc_get_block_size(mcrypt);
+            mcrypt_ivsize = mcrypt_enc_get_iv_size(mcrypt);
+            
         }
-        mcrypt_blocksize = mcrypt_enc_get_block_size(mcrypt);
     }
     {
         printf("Enter the comma-separated blockpasswords list (example: \"2sK1m49se,5sldmIqaa,853svmqpsd\")\n");
@@ -1258,12 +1286,33 @@ int main(int argc, char* argv[]) {
                 fprintf(stderr, "Duplicate/used block number\n");
                 return 40;
             }
+            if (mcrypt != MCRYPT_FAILED) {
+                if (!mcrypt_key) {
+                    mcrypt_key = (char*)malloc(mcrypt_keysize);
+                }
+                
+                KEYGEN kg;
+                kg.hash_algorithm[0]=hash_algo;
+                kg.hash_algorithm[1]=hash_algo;
+                kg.count=keygen_count;
+                kg.salt = keygen_salt;
+                kg.salt_size = strlen(keygen_salt);
+                
+                int ret = mhash_keygen_ext(keygen_algo, kg, mcrypt_key, mcrypt_keysize, (unsigned char*)s, strlen(s));
+                
+                if (!ret) {
+                    fprintf(stderr, "Failed to generate key for password\n");
+                    perror("mhash_keygen_ext");
+                    return 42;
+                }
+            }
             n = strtok(NULL, ",");
             if (n) {
                 mark_used_block(user_first_block);
                 int r = load_entries(user_first_block, 1);
                 if (!r) {
-                    fprintf(stderr, "No entries loaded, maybe need better password\n");
+                    fprintf(stderr, "No entries loaded for auxilary branch, maybe need better password\n");
+                    return 43;
                 }
             }
             s=n;
