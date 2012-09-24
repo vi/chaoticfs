@@ -1249,7 +1249,7 @@ void sigalm() {
 char passwords_area[65536];
 
 int main(int argc, char* argv[]) {
-    block_size = 4096;
+    block_size = 8192;
     rnd_name = "/dev/urandom";
     max_dirty_bytes = 1000000;
     max_dirty_calls = 1000;
@@ -1257,8 +1257,13 @@ int main(int argc, char* argv[]) {
     no_sync = 0;
     dirty_alarm_timeout=5;
     reserved_percent=5;
+    int no_o_direct = 0;
     
-    if (getenv("BLOCK_SIZE"))  block_size = atoi(getenv("BLOCK_SIZE"));
+    if (getenv("BLOCK_SIZE")) {
+        block_size = atoi(getenv("BLOCK_SIZE"));
+        if (block_size<sysconf(_SC_PAGESIZE)) fprintf(stderr, "I don't like this small BLOCK_SIZE\nUse NO_O_DIRECT.\n");
+        if ((block_size & (block_size-1)) != 0) fprintf(stderr, "I don't like this not-power-of-two LOCK_SIZE\nUse NO_O_DIRECT.\n");
+    }
     if (getenv("RANDOM_FILE")) rnd_name = getenv("RANDOM_FILE");
     if (getenv("MAX_DIRTY_BYTES")) max_dirty_bytes = atoi(getenv("MAX_DIRTY_BYTES"));
     if (getenv("MAX_DIRTY_CALLS")) max_dirty_calls = atoi(getenv("MAX_DIRTY_CALLS"));
@@ -1266,6 +1271,7 @@ int main(int argc, char* argv[]) {
     if (getenv("NO_SHRED")) no_shred=1;
     if (getenv("NO_SYNC")) no_sync=1;
     if (getenv("RESERVED_PERCENT")) reserved_percent = atoi(getenv("RESERVED_PERCENT"));
+    if (getenv("NO_O_DIRECT")) no_o_direct=1;
         
     if (argc < 3) {
         fprintf(stderr, "Usage: randomallocfs data_file mountpoint [FUSE options]\n");
@@ -1279,7 +1285,7 @@ int main(int argc, char* argv[]) {
     
     rnd= fopen(rnd_name, "rb");
     if(!rnd) { perror("fopen random"); return 2; }
-    data = open(data_name, O_RDWR|O_DIRECT, 0777);
+    data = open(data_name, O_RDWR | (no_o_direct?O_DIRECT:0), 0777);
     if(data<0) { perror("open data"); return 3; }
     
     {
