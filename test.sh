@@ -121,16 +121,14 @@ teardown
 
 }
 
-export BLOCK_SIZE=128
-tests
-export BLOCK_SIZE=1024
-tests
-export BLOCK_SIZE=4096
-tests
-export BLOCK_SIZE=65536
-tests
-export BLOCK_SIZE=128
 
+BLOCK_SIZE=128 NO_O_DIRECT=y tests
+BLOCK_SIZE=1024 NO_O_DIRECT=y tests
+BLOCK_SIZE=4096 tests
+BLOCK_SIZE=65536 tests
+
+
+export BLOCK_SIZE=8192
 
 echo "Filesystem name test"
 setup
