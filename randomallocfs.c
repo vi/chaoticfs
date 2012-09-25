@@ -69,7 +69,8 @@ struct mydirent {
 struct myhandle {
     struct mydirent* ent;
     char* tmpbuf;
-    int current_block;    
+    int current_block;   
+    int is_dirty; 
 };
 
 struct mydirent *dirents;
@@ -1079,6 +1080,7 @@ static int xmp_open(const char *path, struct fuse_file_info *fi)
     h->current_block = -1;
     h->ent = ent;
     fi->fh = (intptr_t)h;
+    h->is_dirty = 0;
     
     return 0;
 }
@@ -1108,6 +1110,11 @@ static int xmp_read(const char *path, char *buf, size_t size, off_t offset,
         int block_number = (offset / block_size);
         
         if(h->current_block != block_number) {
+            if (h->is_dirty) {
+                int ret = write_block((unsigned char*)h->tmpbuf, ent->blocks[h->current_block]);
+                if (!ret) readonly_flag=1;
+                h->is_dirty = 0;
+            }
             read_block((unsigned char*)h->tmpbuf, ent->blocks[block_number]);
             h->current_block = block_number;
         }
@@ -1147,6 +1154,12 @@ static int xmp_write(const char *path, const char *buf, size_t size,
             if (block_number >= ent->blocks_array_size) {
                 return -EINVAL;
             }
+            if (h->is_dirty) {
+                int ret = write_block((unsigned char*)h->tmpbuf, ent->blocks[h->current_block]);
+                if (!ret) readonly_flag=1;
+                h->is_dirty = 0;
+                if (!ret) return -EINVAL;
+            }
             read_block((unsigned char*)h->tmpbuf, ent->blocks[block_number]);
             h->current_block = block_number;
         }
@@ -1156,17 +1169,11 @@ static int xmp_write(const char *path, const char *buf, size_t size,
         if (size < minilen) minilen = size;
             
         memcpy(h->tmpbuf + minioffset, buf+buf_offset, minilen);
+        h->is_dirty=1;
         
-        int ret = write_block((unsigned char*)h->tmpbuf, ent->blocks[block_number]);
-        
-        if (ret) {
-            buf_offset += minilen;
-            size-=minilen;
-            offset+=minilen;
-        } else {
-            readonly_flag = 1;
-            return -EINVAL;
-        }
+        buf_offset += minilen;
+        size-=minilen;
+        offset+=minilen;
     }
     
     dirty_bytes+=saved_size;
@@ -1195,6 +1202,12 @@ static int xmp_release(const char *path, struct fuse_file_info *fi)
 	(void) path;
     struct myhandle* h = (struct myhandle*)(intptr_t)fi->fh;
         
+    if (h->is_dirty) {
+        int ret = write_block((unsigned char*)h->tmpbuf, h->ent->blocks[h->current_block]);
+        if (!ret) readonly_flag=1;
+        h->is_dirty = 0;
+    }
+    
     free(h->tmpbuf);
     free(h);
     
