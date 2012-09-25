@@ -96,7 +96,7 @@ echo "2test" | ./randomallocfs s m > /dev/null 2> /dev/null
 
 dd if=/dev/urandom bs=1024 count=128 of=randomlet 2> /dev/null
 rm -f testfile
-for((i=0; i<300; ++i)) { echo $i >> testfile; cat randomlet >> testfile; }
+for((i=0; i<500; ++i)) { echo $i >> testfile; cat randomlet >> testfile; }
 rm randomlet;
 
 cat testfile | measuretransferred > m/file 2> stats&
@@ -111,7 +111,9 @@ if [ ! -e m/file ]; then
 else
     SIZE2=`find m/file -printf '%s'`
     echo "    Lost bytes: " $((SIZE-SIZE2)) " of $SIZE"
-    diff -u <(cat testfile | chopfile "$SIZE2") m/file
+    if [ "$SIZE2" -lt "$SIZE" ]; then MINSIZE=$SIZE2; else MINSIZE=$SIZE; fi
+    MINSIZE=$((MINSIZE-BLOCK_SIZE)) # allow last block to be invalid
+    cmp -n "$MINSIZE" testfile m/file
 fi
 rm testfile
 rm stats
