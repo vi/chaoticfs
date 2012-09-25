@@ -85,6 +85,9 @@ int mcrypt_blocksize;
 int mcrypt_ivsize;
 int mcrypt_keysize=256;
 
+int random_shred_probability=5;
+// of 1000
+
 int hash_algo = MHASH_SHA256;
 int keygen_algo = KEYGEN_S2K_ISALTED;
 int keygen_count= 190;
@@ -269,6 +272,32 @@ void shred_block(int i) {
     write_block_ll(shred_buffer, i);
 }
 
+void maybe_shred_some_random_block() {
+    unsigned int r;
+    int i;
+    if (readonly_flag) return;
+    fread(&r, 4, 1, rnd);
+    r %= 1000;
+    if (r<random_shred_probability) {
+        int target = -1;
+        fread(&r, 4, 1, rnd);
+        r %= block_count;
+        if (!busy_map[r]) target=r;
+        else {
+            for(i=(r+1)%block_count; i != r; i=(i+1)%block_count) {
+                if (!busy_map[i]) { 
+                    target=i;
+                    break;
+                }
+            }
+        }
+        if (target!= -1) {
+            fread(shred_buffer, 1, block_size, rnd);
+            write_block_ll(shred_buffer, target);
+        }
+    }
+}
+
 void mark_used_block(int i) {
     if (busy_map[i]) {
         fprintf(stderr, "Marking the block %d twice\n", i);
@@ -350,6 +379,7 @@ int write_block_ll(const unsigned char* buffer, int i) {
         off+=ret;
         s-=ret;
     }
+    maybe_shred_some_random_block();
     return 1;
 }
 
@@ -1289,6 +1319,7 @@ int main(int argc, char* argv[]) {
     if (getenv("NO_SHRED")) no_shred=1;
     if (getenv("NO_SYNC")) no_sync=1;
     if (getenv("RESERVED_PERCENT")) reserved_percent = atoi(getenv("RESERVED_PERCENT"));
+    if (getenv("RANDOM_SHRED_PROBABILITY")) random_shred_probability = atoi(getenv("RANDOM_SHRED_PROBABILITY"));
         
     if (argc < 3) {
         fprintf(stderr, "Usage: randomallocfs data_file mountpoint [FUSE options]\n");
@@ -1401,12 +1432,12 @@ int main(int argc, char* argv[]) {
                     return 42;
                 }
                 
-                //ret = mcrypt_generic_init(mcrypt, mcrypt_key, mcrypt_keysize/8, NULL);
+                ret = mcrypt_generic_init(mcrypt, mcrypt_key, mcrypt_keysize/8, NULL);
                 
-                /*if (ret) {
+                if (ret) {
                     mcrypt_perror(ret);
                     return 44;
-                }*/
+                }
                 
             }
             n = strtok(NULL, ",");
