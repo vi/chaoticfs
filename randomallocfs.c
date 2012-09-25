@@ -1272,10 +1272,13 @@ int main(int argc, char* argv[]) {
     reserved_percent=5;
     int no_o_direct = 0;
     
+    if (getenv("NO_O_DIRECT")) no_o_direct=1;
     if (getenv("BLOCK_SIZE")) {
         block_size = atoi(getenv("BLOCK_SIZE"));
-        if (block_size<sysconf(_SC_PAGESIZE)) fprintf(stderr, "I don't like this small BLOCK_SIZE\nUse NO_O_DIRECT.\n");
-        if ((block_size & (block_size-1)) != 0) fprintf(stderr, "I don't like this not-power-of-two LOCK_SIZE\nUse NO_O_DIRECT.\n");
+        if (!no_o_direct) {
+            if (block_size<sysconf(_SC_PAGESIZE)) fprintf(stderr, "I don't like this small BLOCK_SIZE\nUse NO_O_DIRECT.\n");
+            if ((block_size & (block_size-1)) != 0) fprintf(stderr, "I don't like this not-power-of-two LOCK_SIZE\nUse NO_O_DIRECT.\n");
+        }
     }
     if (getenv("RANDOM_FILE")) rnd_name = getenv("RANDOM_FILE");
     if (getenv("MAX_DIRTY_BYTES")) max_dirty_bytes = atoi(getenv("MAX_DIRTY_BYTES"));
@@ -1284,7 +1287,6 @@ int main(int argc, char* argv[]) {
     if (getenv("NO_SHRED")) no_shred=1;
     if (getenv("NO_SYNC")) no_sync=1;
     if (getenv("RESERVED_PERCENT")) reserved_percent = atoi(getenv("RESERVED_PERCENT"));
-    if (getenv("NO_O_DIRECT")) no_o_direct=1;
         
     if (argc < 3) {
         fprintf(stderr, "Usage: randomallocfs data_file mountpoint [FUSE options]\n");
@@ -1298,7 +1300,7 @@ int main(int argc, char* argv[]) {
     
     rnd= fopen(rnd_name, "rb");
     if(!rnd) { perror("fopen random"); return 2; }
-    data = open(data_name, O_RDWR | (no_o_direct?O_DIRECT:0), 0777);
+    data = open(data_name, O_RDWR | (no_o_direct?0:O_DIRECT), 0777);
     if(data<0) { perror("open data"); return 3; }
     
     {
