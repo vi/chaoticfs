@@ -24,6 +24,8 @@
 #include <mcrypt.h>
 #include <mhash.h>
 
+#include <termios.h>
+
 
 #define SIGNATURE "RndAllV0"
 #define BLOCK_HEADER_SIZE 16
@@ -1347,7 +1349,21 @@ int main(int argc, char* argv[]) {
     }
     {
         printf("Enter the comma-separated blockpasswords list (example: \"2sK1m49se,5sldmIqaa,853svmqpsd\")\n");
-        fgets(passwords_area, sizeof(passwords_area), stdin);
+        
+        {
+            struct termios old, new_;
+            int ret = tcgetattr(0, &old);
+            if (!ret) {
+                memcpy(&new_, &old, sizeof(old));
+                new_.c_lflag &= ~ECHO;
+                tcsetattr (0, TCSAFLUSH, &new_);
+            }
+            fgets(passwords_area, sizeof(passwords_area), stdin);
+            if (!ret) {
+                tcsetattr (0, TCSAFLUSH, &old);
+            }
+        }
+        
         passwords_area[sizeof(passwords_area)-1]=0;
         if (passwords_area[strlen(passwords_area)-1] == '\n') passwords_area[strlen(passwords_area)-1]=0;
         char* s = strtok(passwords_area, ",");
