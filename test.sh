@@ -9,7 +9,7 @@ function setup() {
     fusermount -u m 2> /dev/null || true
     mkdir -p m
     dd if=/dev/zero of=s bs=1024 count=1024 2> /dev/null
-    echo "2test" | ./randomallocfs s m  > /dev/null 2> /dev/null
+    echo "2test" | ./chaoticfs s m  > /dev/null 2> /dev/null
 }
 
 function teardown() {
@@ -67,7 +67,7 @@ setup
 echo qqq > m/qqq
 mkdir m/ddd
 fusermount -u m
-echo "2test" | ./randomallocfs s m > /dev/null
+echo "2test" | ./chaoticfs s m > /dev/null
 diff -u - <(find m -printf '%y %M %n %s %P %Cs %As %Ts\n') <<\EOF
 d drwxr-x--- 0 0  0 0 0
 f -rwxr-x--- 0 4 qqq 0 0 0
@@ -82,7 +82,7 @@ SIZE=`find m/file -printf '%s'`
 echo "  Uses space: " $((SIZE*100/1024/1024)) "%"
 fusermount -u m
 sleep 1 # XXX
-echo "2test" | ./randomallocfs s m > /dev/null
+echo "2test" | ./chaoticfs s m > /dev/null
 SIZE2=`find m/file -printf '%s'`
 test "$SIZE" == "$SIZE2"
 diff -u <(yes ABCDEFGH | nl | chopfile "$SIZE") m/file
@@ -92,7 +92,7 @@ teardown
 echo "Sudden shutdown test"
 dd if=/dev/zero of=s bs=1024 count=102400 2> /dev/null
 mkdir -p m
-echo "2test" | ./randomallocfs s m > /dev/null 2> /dev/null
+echo "2test" | ./chaoticfs s m > /dev/null 2> /dev/null
 
 dd if=/dev/urandom bs=1024 count=128 of=randomlet 2> /dev/null
 rm -f testfile
@@ -101,10 +101,10 @@ rm randomlet;
 
 cat testfile | measuretransferred > m/file 2> stats&
 sleep 20 # adjust this it your computer is too fast
-pkill -9 -f 'randomallocfs s m'
+pkill -9 -f 'chaoticfs s m'
 sleep 1
 fusermount -u m || { sleep 2 && fusermount -u m; } || { sleep 10 && fusermount -u m; }
-echo "2test" | ./randomallocfs s m > /dev/null
+echo "2test" | ./chaoticfs s m > /dev/null
 SIZE=$(<stats)
 if [ ! -e m/file ]; then
     echo "    All $SIZE bytes lost";
@@ -135,9 +135,9 @@ setup
 echo qqq > m/qqq
 mkdir m/ddd
 diff -u - <(find m -printf '%y %M %n %s %P %F %Cs %As %Ts\n') <<\EOF
-d drwxr-x--- 0 0  fuse.randomallocfs 0 0 0
-f -rwxr-x--- 0 4 qqq fuse.randomallocfs 0 0 0
-d drwxr-x--- 0 0 ddd fuse.randomallocfs 0 0 0
+d drwxr-x--- 0 0  fuse.chaoticfs 0 0 0
+f -rwxr-x--- 0 4 qqq fuse.chaoticfs 0 0 0
+d drwxr-x--- 0 0 ddd fuse.chaoticfs 0 0 0
 EOF
 teardown
 

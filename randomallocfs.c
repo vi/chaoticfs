@@ -1355,7 +1355,7 @@ int main(int argc, char* argv[]) {
     if (getenv("RANDOM_SHRED_PROBABILITY")) random_shred_probability = atoi(getenv("RANDOM_SHRED_PROBABILITY"));
         
     if (argc < 3) {
-        fprintf(stderr, "Usage: randomallocfs data_file mountpoint [FUSE options]\n");
+        fprintf(stderr, "Usage: chaoticfs data_file mountpoint [FUSE options]\n");
         fprintf(stderr, "Environment variables:\n");
         fprintf(stderr, "   BLOCK_SIZE=%d", 4096);
         return 1;
@@ -1523,10 +1523,10 @@ int main(int argc, char* argv[]) {
         
         #define MY 2
         char** new_argv = (char**)malloc( (argc-1+MY+1) * sizeof(char*));
-        new_argv[0]="randomallocfs";
+        new_argv[0]="chaoticfs";
         // "My" args
         new_argv[1]="-s"; // single threaded
-        new_argv[2]="-osubtype=randomallocfs";
+        new_argv[2]="-osubtype=chaoticfs";
         int i;
         for(i=2; i<argc; ++i) {
             new_argv[i-1+MY] = argv[i];
