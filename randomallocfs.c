@@ -399,6 +399,7 @@ int write_block(const unsigned char* buffer, struct myblock *block) {
     } else {
         fread(&block->iv, 1, sizeof(block->iv), rnd);
         int s = imin(sizeof(block->iv), mcrypt_ivsize);
+        memset(mcrypt_ivbuf, 0, mcrypt_ivsize);
         memcpy(mcrypt_ivbuf, &block->iv, s);
         
         if(mcrypt_generic_init(mcrypt, mcrypt_key, mcrypt_keysize/8, mcrypt_ivbuf) < 0) {
@@ -450,6 +451,7 @@ int read_block(unsigned char* buffer, struct myblock *block) {
             
         
         int s = imin(sizeof(block->iv), mcrypt_ivsize);
+        memset(mcrypt_ivbuf, 0, mcrypt_ivsize);
         memcpy(mcrypt_ivbuf, &block->iv, s);
         
         if(mcrypt_generic_init(mcrypt, mcrypt_key, mcrypt_keysize/8, mcrypt_ivbuf) < 0) return 0;
