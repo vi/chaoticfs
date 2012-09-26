@@ -1412,6 +1412,7 @@ int main(int argc, char* argv[]) {
             if (mcrypt != MCRYPT_FAILED) {
                 if (!mcrypt_key) {
                     mcrypt_key = (char*)malloc(mcrypt_keysize);
+                    mlock(mcrypt_key, mcrypt_keysize);
                 }
                 if (!mcrypt_ivbuf) {
                     mcrypt_ivbuf = (unsigned char*) malloc(mcrypt_ivsize);
@@ -1454,7 +1455,7 @@ int main(int argc, char* argv[]) {
             s=n;
         }    
     }
-    
+    mlock(busy_map, block_count);
     mark_used_block(user_first_block);
     
     current_dirent_array_size = 128;
