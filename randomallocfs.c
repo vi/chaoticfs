@@ -85,7 +85,7 @@ int current_dirent_array_size;
 int dirent_entries_count;
 
 char* mcrypt_algo="rijndael-256";
-char* mcrypt_mode="cbc";
+char* mcrypt_mode="nofb";
 int mcrypt_blocksize;
 int mcrypt_ivsize;
 int mcrypt_keysize=256;
