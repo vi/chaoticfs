@@ -1432,12 +1432,13 @@ int main(int argc, char* argv[]) {
                     return 42;
                 }
                 
+                /*
                 ret = mcrypt_generic_init(mcrypt, mcrypt_key, mcrypt_keysize/8, NULL);
                 
                 if (ret) {
                     mcrypt_perror(ret);
                     return 44;
-                }
+                }*/
                 
             }
             n = strtok(NULL, ",");
