@@ -60,10 +60,15 @@ int saved_directory_blocks_size;
 
 unsigned char* shred_buffer;
 
+struct myblock {
+    int num;
+    unsigned long iv;
+};
+
 struct mydirent {
     char* full_path;
     long long int length;
-    int* blocks;
+    struct myblock* blocks;
     int blocks_array_size;
     
 };
@@ -143,7 +148,7 @@ void copy_dirent(struct mydirent* dst, struct mydirent* src) {
 
 int get_block_count_for_length(long long int size);
 void mark_unused_block(int i);
-int write_block(const unsigned char* buffer, int i);
+int write_block(const unsigned char* buffer, struct myblock *block);
 int write_block_ll(const unsigned char* buffer, int i);
 int nearest_power_of_two(int s);
 void shred_block(int i);
@@ -160,8 +165,8 @@ void remove_dirent(struct mydirent* ent) {
     if (ent->blocks) {
         int bc = get_block_count_for_length(ent->length);
         for (i=0; i<bc; ++i) {
-            shred_block(ent->blocks[i]);
-            mark_unused_block(ent->blocks[i]);
+            shred_block(ent->blocks[i].num);
+            mark_unused_block(ent->blocks[i].num);
         }
     }
     free(ent->blocks);
@@ -327,7 +332,7 @@ int ensure_size(struct mydirent* ent, long long int size) {
     int required_block_count = get_block_count_for_length(size);
     if (required_block_count > ent->blocks_array_size) {
         ent->blocks_array_size = nearest_power_of_two(required_block_count);
-        int* nb = (int*)realloc(ent->blocks, ent->blocks_array_size*sizeof(int));
+        struct myblock* nb = (struct myblock*)realloc(ent->blocks, ent->blocks_array_size*sizeof(*ent->blocks));
         if(!nb) return 0;
         ent->blocks = nb;
     }
@@ -337,12 +342,13 @@ int ensure_size(struct mydirent* ent, long long int size) {
     
     int i;
     for(i=ent_block_count; i<required_block_count; ++i) {
-        ent->blocks[i] = allocate_block(0);
-        if ((ent->blocks[i]) == -1) {
+        ent->blocks[i].num = allocate_block(0);
+        ent->blocks[i].iv = 0;
+        if ((ent->blocks[i].num) == -1) {
             free(zeroes);
             return 0;
         }
-        write_block(zeroes, ent->blocks[i]);
+        write_block(zeroes, &ent->blocks[i]);
     }
     free(zeroes);
     
@@ -358,8 +364,8 @@ int d_truncate(struct mydirent* ent, long long int size) {
     int i;
     
     for (i=required_block_count; i<ent_block_count; ++i) {
-        shred_block(ent->blocks[i]);
-        mark_unused_block(ent->blocks[i]);
+        shred_block(ent->blocks[i].num);
+        mark_unused_block(ent->blocks[i].num);
     }
     ent->length = size;
     return 1;
@@ -383,13 +389,17 @@ int write_block_ll(const unsigned char* buffer, int i) {
     return 1;
 }
 
-int write_block(const unsigned char* buffer, int i) {
+static __attribute__((const)) int imin(int a, int b) { return (a < b) ? a : b; }
+
+int write_block(const unsigned char* buffer, struct myblock *block) {
+    int i = block->num;
     memcpy(mcrypt_buf, buffer, block_size);
     if (mcrypt == MCRYPT_FAILED) {
         return write_block_ll(mcrypt_buf, i);
     } else {
-        memcpy(mcrypt_ivbuf, mcrypt_initvect, mcrypt_ivsize);
-        *((unsigned long int*)mcrypt_ivbuf) ^= htobe32(i);
+        fread(&block->iv, 1, sizeof(block->iv), rnd);
+        int s = imin(sizeof(block->iv), mcrypt_ivsize);
+        memcpy(mcrypt_ivbuf, &block->iv, s);
         
         if(mcrypt_generic_init(mcrypt, mcrypt_key, mcrypt_keysize/8, mcrypt_ivbuf) < 0) {
             fprintf(stderr, "Encryption init error\n");
@@ -403,6 +413,13 @@ int write_block(const unsigned char* buffer, int i) {
         
         return write_block_ll(mcrypt_buf, i);
     }
+}
+
+int write_block_simple(const unsigned char* buffer, int i) {
+    struct myblock b;
+    b.num = i;
+    b.iv = htobe32(i);
+    return write_block(buffer, &b);
 }
 
 int read_block_ll(unsigned char* buffer, int i) {
@@ -421,7 +438,8 @@ int read_block_ll(unsigned char* buffer, int i) {
     return 1;
 }
 
-int read_block(unsigned char* buffer, int i) {
+int read_block(unsigned char* buffer, struct myblock *block) {
+    int i = block->num;
     int ret = read_block_ll(mcrypt_buf, i);
     if (!ret) return 0;
     if (mcrypt == MCRYPT_FAILED) {
@@ -430,8 +448,9 @@ int read_block(unsigned char* buffer, int i) {
         int ret = read_block_ll(mcrypt_buf, i);
         if (!ret) return 0;
             
-        memcpy(mcrypt_ivbuf, mcrypt_initvect, mcrypt_ivsize);
-        *((unsigned long int*)mcrypt_ivbuf) ^= htobe32(i);
+        
+        int s = imin(sizeof(block->iv), mcrypt_ivsize);
+        memcpy(mcrypt_ivbuf, &block->iv, s);
         
         if(mcrypt_generic_init(mcrypt, mcrypt_key, mcrypt_keysize/8, mcrypt_ivbuf) < 0) return 0;
         if(mdecrypt_generic (mcrypt, mcrypt_buf, block_size) < 0) return 0;
@@ -439,6 +458,13 @@ int read_block(unsigned char* buffer, int i) {
     }
     memcpy(buffer, mcrypt_buf, block_size);    
     return 0;
+}
+
+int read_block_simple(unsigned char* buffer, int i) {
+    struct myblock b;
+    b.num = i;
+    b.iv = htobe32(i);
+    return read_block(buffer, &b);
 }
 
 int get_maximum_path_length() {
@@ -452,7 +478,7 @@ int get_maximum_path_length() {
     dirent_size += 4; /* starting block in this extend */
     // If we can't save all block numbers in this block, we save further block numbers in next blocks
     
-    dirent_size+=16; /* there should be room for at least 4 blocks or this is not serious */
+    dirent_size+=16; /* there should be room for at least 2 blocks or this is not serious */
     dirent_size += 4; /* next dirent's block number */
     dirent_size += 4; /* next dirent's offset in block */ 
     dirent_size += 8; /* padding for possible extensions */
@@ -471,7 +497,7 @@ int get_saved_entry_minimal_size(struct mydirent* ent) {
     dirent_size += 4; /* starting block in this extend */
     // If we can't save all block numbers in this block, we save further block numbers in next blocks
     
-    dirent_size+=16; /* there should be room for at least 4 blocks or this is not serious */
+    dirent_size+=16; /* there should be room for at least 2 blocks or this is not serious */
     dirent_size += 4; /* next dirent's block number */
     dirent_size += 4; /* next dirent's offset in block */ 
     dirent_size += 8; /* padding for possible extensions */
@@ -533,7 +559,7 @@ int save_entries(int starting_block) {
             }
             continue;
         }
-        int number_of_blocks_we_will_save = (block_size - offset - current_dirent_size) / sizeof(int);
+        int number_of_blocks_we_will_save = (block_size - offset - current_dirent_size) / sizeof(struct myblock);
         if (i==dirent_entries_count-1) {
             next_dirent_size = 0;
         } else {
@@ -559,7 +585,8 @@ int save_entries(int starting_block) {
         *(long int*)(block+offset) = htobe32(number_of_blocks_we_will_save); offset+=4;
         *(long int*)(block+offset) = htobe32(position_in_block_list); offset+=4;
         for (j=position_in_block_list; j<position_in_block_list + number_of_blocks_we_will_save; ++j) {
-            *(long int*)(block+offset) = htobe32(ent->blocks[j]); offset+=4;
+            *(long int*)(block+offset) = htobe32(ent->blocks[j].num); offset+=4;
+            *(long int*)(block+offset) = htobe32(ent->blocks[j].iv); offset+=4;
         }
         position_in_block_list += number_of_blocks_we_will_save;
         //fprintf(stderr, "Offset: %d\n", offset);
@@ -599,7 +626,7 @@ int save_entries(int starting_block) {
             if (block == first_block_buffer) {
                 block = block_buffer;
             } else {
-                write_block(block, current_block);
+                write_block_simple(block, current_block);
             }
             
             current_block = new_block;
@@ -621,8 +648,8 @@ int save_entries(int starting_block) {
     fprintf(stderr, "\n");
     */
     
-    write_block(block, current_block);
-    write_block(first_block_buffer, starting_block);
+    write_block_simple(block, current_block);
+    write_block_simple(first_block_buffer, starting_block);
     
     if (!no_sync) {
         fdatasync(data);
@@ -661,7 +688,7 @@ int load_entries(int starting_block, int only_mark_blocks) {
     
     unsigned char* block = (unsigned char*) malloc(block_size);
     
-    read_block(block, starting_block);
+    read_block_simple(block, starting_block);
     int offset;
     if (memcmp(block+8, SIGNATURE, 8)) {
         return 0;
@@ -702,15 +729,17 @@ int load_entries(int starting_block, int only_mark_blocks) {
         int position_in_block_list = be32toh(*(long int*)(block+offset)); offset+=4;
         if (ent && !ent->blocks && bc) {
             ent->blocks_array_size = nearest_power_of_two(bc);
-            ent->blocks = (int*)malloc(ent->blocks_array_size * sizeof(int));
+            ent->blocks = (struct myblock*)malloc(ent->blocks_array_size * sizeof(*ent->blocks));
             memset(ent->blocks, 0, ent->blocks_array_size);
         }
         for (j=0; j<blocks_here; ++j) {
             int idx = be32toh(*(long int*)(block+offset)); offset+=4;
+            unsigned long iv = be32toh(*(long int*)(block+offset)); offset+=4;
             if(idx>=0 && idx<block_count) {
                 mark_used_block(idx);
                 if (ent) {
-                    ent->blocks[j+position_in_block_list] = idx;
+                    ent->blocks[j+position_in_block_list].num = idx;
+                    ent->blocks[j+position_in_block_list].iv = iv;
                 }
             } else {
                 free(block);
@@ -730,7 +759,7 @@ int load_entries(int starting_block, int only_mark_blocks) {
             
         if (next_block != current_block) {
             current_block = next_block;
-            read_block(block, current_block);
+            read_block_simple(block, current_block);
             if (memcmp(block+8, SIGNATURE, 8)) {
                 fprintf(stderr, "Signature failed in loading block\n");
                 return counter;
@@ -753,7 +782,7 @@ void traverse_entries_and_debug_print(int starting_block) {
     unsigned char* block = (unsigned char*) malloc(block_size);
     unsigned char* block2 = (unsigned char*) malloc(block_size);
     
-    read_block(block, starting_block);
+    read_block_simple(block, starting_block);
     int offset;
     {
         if (memcmp(block+8, SIGNATURE, 8)) {
@@ -790,9 +819,13 @@ void traverse_entries_and_debug_print(int starting_block) {
         fprintf(stdout, "  blocks offset %d\n", blocks_offset); fflush(stdout);
         for (j=0; j<blocks_here; ++j) {
             int idx = be32toh(*(long int*)(block+offset)); offset+=4;
-            fprintf(stdout, "  block %d\n", idx); fflush(stdout);
+            int iv = be32toh(*(long int*)(block+offset)); offset+=4;
+            fprintf(stdout, "  block %d iv %08X\n", idx, iv); fflush(stdout);
             if(idx>=0 && idx<block_count) {
-                read_block(block2, idx);
+                struct myblock b;
+                b.num = idx;
+                b.iv = iv;
+                read_block(block2, &b);
                 fprintf(stdout, "    %02X%02X%02X%02X\n", 
                     block2[0], block2[1], block2[2], block2[3]); 
                 fflush(stdout);
@@ -810,7 +843,7 @@ void traverse_entries_and_debug_print(int starting_block) {
             
         if (next_block != current_block) {
             current_block = next_block;
-            read_block(block, current_block);
+            read_block_simple(block, current_block);
             if (memcmp(block+8, SIGNATURE, 8)) {
                 char buf[10];
                 snprintf(buf, 9, "%s", block+8);
@@ -837,7 +870,7 @@ void generate_test_dirents() {
     ent = find_dirent("/ololo");
     unsigned char *block = (unsigned char*) malloc(block_size);
     strcpy((char*)block, "Hello, world\n");
-    write_block(block, ent->blocks[0]);
+    write_block(block, &ent->blocks[0]);
     
     ent = create_dirent("/r/");
     
@@ -849,7 +882,7 @@ void generate_test_dirents() {
     int i;
     for(i=0; i<9999/block_size+1; ++i) {
         block[1]=i;
-        write_block(block, ent->blocks[i]);
+        write_block(block, &ent->blocks[i]);
     }
     
     
@@ -1143,11 +1176,11 @@ static int xmp_read(const char *path, char *buf, size_t size, off_t offset,
         
         if(h->current_block != block_number) {
             if (h->is_dirty) {
-                int ret = write_block((unsigned char*)h->tmpbuf, ent->blocks[h->current_block]);
+                int ret = write_block((unsigned char*)h->tmpbuf, &ent->blocks[h->current_block]);
                 if (!ret) readonly_flag=1;
                 h->is_dirty = 0;
             }
-            read_block((unsigned char*)h->tmpbuf, ent->blocks[block_number]);
+            read_block((unsigned char*)h->tmpbuf, &ent->blocks[block_number]);
             h->current_block = block_number;
         }
         
@@ -1187,12 +1220,12 @@ static int xmp_write(const char *path, const char *buf, size_t size,
                 return -EINVAL;
             }
             if (h->is_dirty) {
-                int ret = write_block((unsigned char*)h->tmpbuf, ent->blocks[h->current_block]);
+                int ret = write_block((unsigned char*)h->tmpbuf, &ent->blocks[h->current_block]);
                 if (!ret) readonly_flag=1;
                 h->is_dirty = 0;
                 if (!ret) return -EINVAL;
             }
-            read_block((unsigned char*)h->tmpbuf, ent->blocks[block_number]);
+            read_block((unsigned char*)h->tmpbuf, &ent->blocks[block_number]);
             h->current_block = block_number;
         }
         
@@ -1235,7 +1268,7 @@ static int xmp_release(const char *path, struct fuse_file_info *fi)
     struct myhandle* h = (struct myhandle*)(intptr_t)fi->fh;
         
     if (h->is_dirty) {
-        int ret = write_block((unsigned char*)h->tmpbuf, h->ent->blocks[h->current_block]);
+        int ret = write_block((unsigned char*)h->tmpbuf, &h->ent->blocks[h->current_block]);
         if (!ret) readonly_flag=1;
         h->is_dirty = 0;
     }
