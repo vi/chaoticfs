@@ -1098,8 +1098,8 @@ static int xmp_rename(const char *from, const char *to)
     
     return 0;
 }
-static int xmp_chmod(const char *path, mode_t mode) { return -ENOSYS; }
-static int xmp_chown(const char *path, uid_t uid, gid_t gid) { return -ENOSYS; }
+static int xmp_chmod(const char *path, mode_t mode) { return 0; }
+static int xmp_chown(const char *path, uid_t uid, gid_t gid) { return 0; }
 
 static int xmp_truncate(const char *path, off_t size)
 {
@@ -1114,7 +1114,7 @@ static int xmp_truncate(const char *path, off_t size)
 	return -ENOSPC;
 }
 
-static int xmp_utimens(const char *path, const struct timespec ts[2]) { return -ENOSYS; }
+static int xmp_utimens(const char *path, const struct timespec ts[2]) { return 0; }
 
 
 static int xmp_open(const char *path, struct fuse_file_info *fi)
