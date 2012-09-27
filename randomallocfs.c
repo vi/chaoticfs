@@ -448,7 +448,6 @@ int read_block(unsigned char* buffer, struct myblock *block) {
     } else {
         int ret = read_block_ll(mcrypt_buf, i);
         if (!ret) return 0;
-            
         
         int s = imin(sizeof(block->iv), mcrypt_ivsize);
         memset(mcrypt_ivbuf, 0, mcrypt_ivsize);
@@ -1339,6 +1338,30 @@ int main(int argc, char* argv[]) {
     reserved_percent=5;
     int no_o_direct = 0;
     
+    
+    if (argc < 3) {
+        fprintf(stderr, "Usage: chaoticfs data_file mountpoint [FUSE options]\n");
+        fprintf(stderr, "Environment variables:\n");
+        fprintf(stderr, "   BLOCK_SIZE, default %d\n", block_size);
+        fprintf(stderr, "   RANDOM_FILE, default %s\n", rnd_name);
+        fprintf(stderr, "   MAX_DIRTY_BYTES, default %d\n", max_dirty_bytes);
+        fprintf(stderr, "   MAX_DIRTY_CALLS, default %d\n", max_dirty_calls);
+        fprintf(stderr, "   NO_SHRED\n");
+        fprintf(stderr, "   NO_SYNC\n");
+        fprintf(stderr, "   NO_O_DIRECT\n");
+        fprintf(stderr, "   RESERVED_PERCENT, default %d\n", reserved_percent);
+        fprintf(stderr, "   RANDOM_SHRED_PROBABILITY %d of 1000\n", random_shred_probability);
+        fprintf(stderr, "\n");
+        fprintf(stderr, "   MCRYPT_ALGO, default %s\n", mcrypt_algo);
+        fprintf(stderr, "   MCRYPT_MODE, default %s\n", mcrypt_mode);
+        fprintf(stderr, "   MCRYPT_KEYSIZE, default %d\n", mcrypt_keysize);
+        fprintf(stderr, "   HASH_ALGO, default %d\n", hash_algo);
+        fprintf(stderr, "   KEYGEN_ALGO, default %d\n", keygen_algo);
+        fprintf(stderr, "   KEYGEN_COUNT, default %d\n", keygen_count);
+        fprintf(stderr, "   KEYGEN_SALT, default %s\n", keygen_salt);
+        return 1;
+    }
+    
     if (getenv("NO_O_DIRECT")) no_o_direct=1;
     if (getenv("BLOCK_SIZE")) {
         block_size = atoi(getenv("BLOCK_SIZE"));
@@ -1355,13 +1378,6 @@ int main(int argc, char* argv[]) {
     if (getenv("NO_SYNC")) no_sync=1;
     if (getenv("RESERVED_PERCENT")) reserved_percent = atoi(getenv("RESERVED_PERCENT"));
     if (getenv("RANDOM_SHRED_PROBABILITY")) random_shred_probability = atoi(getenv("RANDOM_SHRED_PROBABILITY"));
-        
-    if (argc < 3) {
-        fprintf(stderr, "Usage: chaoticfs data_file mountpoint [FUSE options]\n");
-        fprintf(stderr, "Environment variables:\n");
-        fprintf(stderr, "   BLOCK_SIZE=%d", 4096);
-        return 1;
-    }
     
     data_name = argv[1];
     user_first_block = 2;
