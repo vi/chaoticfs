@@ -889,6 +889,7 @@ void generate_test_dirents() {
     
     free(block);
     
+    dirty_status=1;
     
     int s = save_entries(user_first_block);
     
