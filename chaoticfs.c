@@ -501,7 +501,7 @@ int get_maximum_path_length() {
     dirent_size+=16; /* there should be room for at least 2 blocks or this is not serious */
     dirent_size += 4; /* next dirent's block number */
     dirent_size += 4; /* next dirent's offset in block */ 
-    dirent_size += 8; /* padding for possible extensions */
+    dirent_size += 8; /* reserved for possible extensions */
     return block_size - BLOCK_HEADER_SIZE - dirent_size;
 }
 
@@ -520,7 +520,7 @@ int get_saved_entry_minimal_size(struct mydirent* ent) {
     dirent_size+=16; /* there should be room for at least 2 blocks or this is not serious */
     dirent_size += 4; /* next dirent's block number */
     dirent_size += 4; /* next dirent's offset in block */ 
-    dirent_size += 8; /* padding for possible extensions */
+    dirent_size += 8; /* reserved for possible extensions */
     return dirent_size;
 }
 
