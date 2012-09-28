@@ -13,7 +13,10 @@ function setup() {
 }
 
 function um() {
-    fusermount -u m || { sleep 2 && fusermount -u m; } || { sleep 10 && fusermount -u m; }
+    fusermount -u m || { sleep 2 && fusermount -u m; } ||
+    while true; do
+        fusermount -u m && break || sleep 10;
+    done
 }
 
 function teardown() {
