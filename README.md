@@ -44,11 +44,13 @@ Misfeatures
 * The whole metadata (filenames, block lists) 
 is kept in memory and serialized to storage at once
 * No fsck/recovery utility (yet)
-* No symlinks and other advanced filesystem features
+* No symlinks, attributes, sparse files 
+and other advanced filesystem features
 * Not designed to be fast
 * Not designed to be reliable
 * Not designed to hold many files or big files
-* No tool to access the filesystem when FUSE is not available (yet)
+* No tool to access the filesystem when
+FUSE is not available (yet)
 
 Usage
 ===
@@ -120,6 +122,155 @@ only one branch...
     Combined with the previous point it means that
     secure usage of this version of chaoticfs is
     a bit inconvenient.
+    
+Filesystem format
+===
+
+Block level
+---
+The filesystem is made of fixed size blocks
+(BLOCK_SIZE, by default 8192).
+Each block can be free or contain [part of] directory or file content.
+"Superblock" is just the first directory's block.
+Each block is numbered from 0 to (fize_size/block_size-1).
+
+Each block is encrypted (by default rijndael-256
+ in nOFB mode) with a key and
+ 32-bit initialization vector. 
+ Trailing bytes of the IV buffer are 
+ initialized with zeroes. 
+ 
+For file's content, IV is generated 
+ randomly each time the block is written.
+ The IV is stored in the directory.
+
+For directory's content, IV is big-endian 
+ 32-bit block number; but directory blocks get
+ addititionally "scrambled" by XORing the first
+ 4 bytes longint over all remaining longints.
+ This is to make updated directory content
+ appear to be completely random when comparing backups
+ of chaoticfs storage
+ (I'm calling this "Poor man's IV").
+ 
+    
+Directory
+---
+There is only one directory per branch which 
+stores all files and directories in the branch,
+identified by the full path. Each entry of the
+directory is called direntry
+("mydirent" structure in the code)
+
+Directory is represented by empty file 
+with the path ending in "/".
+
+File's path must not end in "/".
+
+There always should be a "/" direntry.
+
+Each direntry have path, file length and block list fields.
+Block list is the list of block numbers together with
+IVs for decryption.
+
+Serialized directory
+---
+
+The directory is saved to dirent blocks.
+The first dirent block number is stored in the
+password itself.
+
+Each dirent block has a header and one or more entries.
+
+Header is 8 random bytes, then 8-byte signature "RndAllV0".
+
+Each entry represents a direntry.
+If direntry's block list can't fit in the block,
+another "duplicate" dirent gets created
+with nonzero block index offset.
+
+Each entry consists of:
+
+* direntry path's string length - 4 bytes, big endian;
+* direntry path - variable number of bytes;
+* file length - 8 bytes, big endian;
+* number of blocks in this entry - 4 bytes, big endian;
+* block index offset in this entry - 4 bytes, big endian;
+* block idexes and IVs - zero of more bytes
+    * a block index - 4 bypes, big endian;
+    * the IV for this block - 4 bytes.
+* block number for the next entry - 4 bytes, big endian;
+* offset in the block for the next entry -
+            4 bytes, big endian;
+* reserved - 8 bytes.
+            
+If the block number and offset both equal to zero then this
+is the last direntry.
+
+Example:
+
+    #block 2:
+    \x34\xF5\x12\x46\x79\x12\x15\x05  # random bytes
+    RndAllV0 # signature
+    
+    \x00\x00\x00\x01 # name length
+    / # name
+    \x00\x00\x00\x00\x00\x00\x00\x00 # file length
+    \x00\x00\x00\x00 # no blocks at all for directories
+    \x00\x00\x00\x00 # no blocks at all for directories
+    # no blocks
+    \x00\x00\x00\x02 # the next entry is also in block 2
+    \x00\x00\x00\x35 # the next direntry is at offset 53
+    \x00\x00\x00\x00\x00\x00\x00\x00 - reserved
+    
+    \x00\x00\x00\x06 # name length
+    /qwer/ # name
+    \x00\x00\x00\x00\x00\x00\x00\x00 # file length
+    \x00\x00\x00\x00 # no blocks at all for directories
+    \x00\x00\x00\x00 # no blocks at all for directories
+    # no blocks
+    \x00\x00\x00\x02 # the next entry is also in block 2
+    \x00\x00\x00\x5F # the next direntry is at offset 95
+    \x00\x00\x00\x00\x00\x00\x00\x00 reserved
+    
+    \x00\x00\x00\x10 # name length
+    /qwer/secret.txt # name
+    \x00\x00\x00\x00\x00\x00\xE0\x00 # file length
+    \x00\x00\x00\x05 # only pointing to 5 first blocks here
+    \x00\x00\x00\x00 # first block is file's 0'th block
+    \x00\x00\x23\x5C # file's block 0 is has index 9015
+    \x49\xF4\xF9\xCC # file's block 0 use IV 49F9F9CC
+    \x00\x00\x20\xBF # file's block 1 is has index 9015
+    \x44\x56\x23\xC2 # file's block 1 use IV 445623C2
+    \x00\x00\x12\x05 # file's block 2 is has index 4613
+    \x23\xCD\x98\xD3 # file's block 2 use IV 23CD98D3
+    \x00\x00\x03\x45 # file's block 3 is has index 837
+    \x6F\xD4\x23\xB6 # file's block 3 use IV 6FD423B6
+    \x00\x00\x04\x23 # file's block 4 is has index 1059
+    \x23\x5D\xF8\x6F # file's block 4 use IV 235DF86F
+    \x00\x00\x0F\xDC # the next entry is in block 4045
+    \x00\x00\x00\x10 # the next direntry is at offset 16
+    \x00\x00\x00\x00\x00\x00\x00\x00 reserved
+    
+    --
+    #block 4045:
+    \x98\xCF\xDE\xBF\x93\x23\xF3\xFF  # random bytes
+    RndAllV0 # signature
+    \x00\x00\x00\x00\x00\x00\xE0\x00 # file length
+    \x00\x00\x00\x02 # pointing to 2 remaining blocks here
+    \x00\x00\x00\x05 # first block here is file's 5'th block
+    \x00\x00\x37\x3D # file's block 5 is has index 14301
+    \x8C\xCC\x32\xDD # file's block 5 use IV 8CCC32DD
+    \x00\x00\x34\x12 # file's block 6 is has index 13330
+    \xD3\x97\x57\xC7 # file's block 6 use IV D49757C7
+    \x00\x00\x00\x00 # no next entry
+    \x00\x00\x00\x00 # no next entry
+    \x00\x00\x00\x00\x00\x00\x00\x00 reserved
+    
+    
+
+
+Use `--debug-print` to see the dump the directory.
 
 Todo
 ===
