@@ -420,11 +420,24 @@ int write_block(const unsigned char* buffer, struct myblock *block) {
     return write_block_enc(buffer, block);
 }
 
-int write_block_simple(const unsigned char* buffer, int i) {
+void xor_scrable_buffer(unsigned char* buffer) {
+    int j;
+    unsigned long pseudokey = *(unsigned long*)buffer;
+    for(j=1; j<(block_size / sizeof(unsigned long)); ++j) {
+        ((unsigned long*)buffer)[j] ^= pseudokey;
+    }
+}
+
+int write_block_simple(unsigned char* buffer, int i) {
     struct myblock b;
     b.num = i;
     b.iv = htobe32(i);
-    return write_block_enc(buffer, &b);
+    // scramble the data, using first 4 bytes of buffer is "poor man's IV"
+    // write_block_simple is called by save_entries and it sets first 8 bytes to random
+    if (mcrypt!=MCRYPT_FAILED) xor_scrable_buffer(buffer);
+    int ret = write_block_enc(buffer, &b);
+    if (mcrypt!=MCRYPT_FAILED) xor_scrable_buffer(buffer);
+    return ret;
 }
 
 int read_block_ll(unsigned char* buffer, int i) {
@@ -468,8 +481,10 @@ int read_block(unsigned char* buffer, struct myblock *block) {
 int read_block_simple(unsigned char* buffer, int i) {
     struct myblock b;
     b.num = i;
-    b.iv = htobe32(i);
-    return read_block(buffer, &b);
+    b.iv = htobe32(i);    
+    int ret = read_block(buffer, &b);
+    if (mcrypt!=MCRYPT_FAILED) xor_scrable_buffer(buffer);
+    return ret;
 }
 
 int get_maximum_path_length() {
