@@ -1,5 +1,6 @@
 // Simple FUSE filesystem that allocates blocks randomly for convenient plausible deniability encryption FS.
-// Vitaly "_Vi" Shukela; License=MIT; 2012.
+// Vitaly "_Vi" Shukela; 2012.
+// License=MIT, but libmcrypt is GPL.
 
 #define FUSE_USE_VERSION 26
 #define _GNU_SOURCE
