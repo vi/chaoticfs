@@ -390,13 +390,12 @@ int write_block_ll(const unsigned char* buffer, int i) {
 
 static __attribute__((const)) int imin(int a, int b) { return (a < b) ? a : b; }
 
-int write_block(const unsigned char* buffer, struct myblock *block) {
+int write_block_enc(const unsigned char* buffer, struct myblock *block) {
     int i = block->num;
     memcpy(mcrypt_buf, buffer, block_size);
     if (mcrypt == MCRYPT_FAILED) {
         return write_block_ll(mcrypt_buf, i);
     } else {
-        fread(&block->iv, 1, sizeof(block->iv), rnd);
         int s = imin(sizeof(block->iv), mcrypt_ivsize);
         memset(mcrypt_ivbuf, 0, mcrypt_ivsize);
         memcpy(mcrypt_ivbuf, &block->iv, s);
@@ -415,11 +414,16 @@ int write_block(const unsigned char* buffer, struct myblock *block) {
     }
 }
 
+int write_block(const unsigned char* buffer, struct myblock *block) {
+    if (mcrypt != MCRYPT_FAILED) { fread(&block->iv, 1, sizeof(block->iv), rnd); }
+    return write_block_enc(buffer, block);
+}
+
 int write_block_simple(const unsigned char* buffer, int i) {
     struct myblock b;
     b.num = i;
     b.iv = htobe32(i);
-    return write_block(buffer, &b);
+    return write_block_enc(buffer, &b);
 }
 
 int read_block_ll(unsigned char* buffer, int i) {
