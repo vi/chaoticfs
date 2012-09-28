@@ -1,5 +1,4 @@
-// Simple FUSE filesystem that allocates blocks randomly
-// Precursor to FUSE-based convenient plausible deniability FS.
+// Simple FUSE filesystem that allocates blocks randomly for convenient plausible deniability encryption FS.
 // Vitaly "_Vi" Shukela; License=MIT; 2012.
 
 #define FUSE_USE_VERSION 26
