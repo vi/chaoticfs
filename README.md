@@ -108,8 +108,8 @@ Concerns
 ---
 * Don't rely on safety of the storage.
 Use SHA1SUMS, unmount, remount and check SHA1SUMS to be sure.
-You can backup chaoticfs storage (<s>comparing backups
-should not releal too much info</s> /\* TODO \*/).
+You can backup chaoticfs storage (~~comparing backups
+should not releal too much info~~ /\* TODO \*/).
 * Other things can point to the "missing" secret parts
 of the directory.
 * Wrong password + unnoticed message or empiness of the directory => defuct branch. Forget to specify some branch => spoiled data in that branch.
@@ -148,9 +148,9 @@ For directory's content, IV is big-endian
  32-bit block number; but directory blocks get
  addititionally "scrambled" by XORing the first
  4 bytes longint over all remaining longints.
- <s>This is to make updated directory content
+ ~~This is to make updated directory content
  appear to be completely random when comparing backups
- of chaoticfs storage.</s>
+ of chaoticfs storage.~~
  (I'm calling this "Poor man's IV")
  
     
