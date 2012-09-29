@@ -148,10 +148,10 @@ For directory's content, IV is big-endian
  32-bit block number; but directory blocks get
  addititionally "scrambled" by XORing the first
  4 bytes longint over all remaining longints.
- This is to make updated directory content
+ <s>This is to make updated directory content
  appear to be completely random when comparing backups
- of chaoticfs storage
- (I'm calling this "Poor man's IV").
+ of chaoticfs storage.</s>
+ (I'm calling this "Poor man's IV")
  
     
 Directory
