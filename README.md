@@ -108,8 +108,8 @@ Concerns
 ---
 * Don't rely on safety of the storage.
 Use SHA1SUMS, unmount, remount and check SHA1SUMS to be sure.
-You can backup chaoticfs storage (comparing backups
-should not releal too much info).
+You can backup chaoticfs storage (<s>comparing backups
+should not releal too much info</s> /\* TODO \*/).
 * Other things can point to the "missing" secret parts
 of the directory.
 * Wrong password + unnoticed message or empiness of the directory => defuct branch. Forget to specify some branch => spoiled data in that branch.
