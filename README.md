@@ -94,7 +94,7 @@ the directory from the last blockpassword.
 If you are creating a branch, then continue.
 If it is because of incorrect password, then unmount and retry (otherwise you can overwrite the correct entry).
 
-* `No entries loaded for auxilary branch, maybe need better password` - 
+* `No entries loaded for auxiliary branch, maybe need better password` - 
 can't load the directory for non-last blockpassword.
 chaoticfs aborts in this case.
 
